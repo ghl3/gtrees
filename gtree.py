@@ -1,6 +1,6 @@
 from __future__ import division
 
-# mylib.py
+import math
 import logging
 
 import random
@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 
 from abc import ABCMeta, abstractmethod
-
 
 tree_logger = logging.getLogger('tree')
 evolution_logger = logging.getLogger('evolution')
@@ -31,7 +30,8 @@ class Node(object):
         results = []
 
         for leaf_hash, df_leaf in df.groupby(leaf_for_row):
-            predict_fn = leaf_score_map[leaf_hash]
+            predict_fn = leaf_score_map.get(leaf_hash,
+                                            lambda df: pd.Series([0.5 for _ in range(len(df))], index=df.index))
             predictions = predict_fn(df_leaf)
             results.append(predictions)
 
@@ -136,7 +136,6 @@ def get_best_split(df, target, loss_fn, leaf_prediction_builder, var_split_candi
             candidate = None
 
         split, loss = _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidate)
-        # print "Loss for {} {} {}".format(var, split, loss)
         if best_loss is None or loss < best_loss:
             best_var = var
             best_split = split
@@ -187,12 +186,7 @@ def train_greedy_tree(df, target, loss_fn,
         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
         return leaf, leaf_map
 
-    df_for_splitting = df
-
-    if feature_sample_rate:
-        df_for_splitting = df_for_splitting.sample(frac=feature_sample_rate, replace=False, axis=1)
-    if row_sample_rate:
-        df_for_splitting = df_for_splitting.sample(frac=row_sample_rate, replace=False, axis=0)
+    df_for_splitting = sample(df, row_frac=row_sample_rate, col_frac=feature_sample_rate)
 
     var, split, loss = get_best_split(df_for_splitting, target.loc[df_for_splitting.index],
                                       loss_fn, leaf_prediction_builder, var_split_candidate_map)
@@ -237,84 +231,6 @@ def train_greedy_tree(df, target, loss_fn,
     return (BranchNode(var, split,
                        left_tree, right_tree),
             leaf_map)
-
-
-#
-#
-# def train_random_tree(df, target, loss_fn,
-#                       max_depth=None,
-#                       min_to_split=None,
-#                       leaf_map=None,
-#                       feature_sample_rate=0.5,
-#                       row_samle_rate=0.5,
-#                       leaf_prediction_builder=leaf_good_rate_split_builder,
-#                       var_split_candidate_map=None,
-#                       current_depth=0):
-#     """
-#     Returns a tree and its leaf map
-#     """
-#
-#     if var_split_candidate_map is None:
-#         var_split_candidate_map = {var: _get_split_candidates(df[var]) for var in df.columns}
-#
-#     if leaf_map is None:
-#         leaf_map = {}
-#
-#     # Calculate the loss on all the features and targes
-#     predictor = leaf_prediction_builder(df, target)
-#     predictions = predictor(df)  # .apply(predictor, axis=1)
-#     current_loss = loss_fn(predictions, target)
-#
-#     if len(df) == 1 or (max_depth is not None and current_depth > max_depth) or (
-#                     min_to_split is not None and len(df) < min_to_split):
-#         print "Reached leaf node, or constraints force termination.  Returning"
-#         leaf = LeafNode()
-#         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
-#         return leaf, leaf_map
-#
-#
-#
-#     var, split, loss = get_best_split(reduced, target.loc[reduced.index], loss_fn, leaf_prediction_builder, var_split_candidate_map)
-#
-#     print "Training.  Depth {} Current Loss: {} Best Split: {} {} {}".format(current_depth,
-#                                                                              current_loss,
-#                                                                              var,
-#                                                                              split,
-#                                                                              loss)
-#
-#     if loss >= current_loss:
-#         print "No split improves loss.  Returning"
-#         leaf = LeafNode()
-#         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
-#         return leaf, leaf_map
-#
-#     left_idx = df[var] <= split
-#     right_idx = df[var] > split
-#
-#     left_tree, left_map = train_greedy_tree(df.loc[left_idx], target.loc[left_idx],
-#                                             loss_fn,
-#                                             max_depth=max_depth,
-#                                             min_to_split=min_to_split,
-#                                             leaf_map=leaf_map,
-#                                             leaf_prediction_builder=leaf_prediction_builder,
-#                                             var_split_candidate_map=var_split_candidate_map,
-#                                             current_depth=current_depth + 1)
-#
-#     right_tree, right_map = train_greedy_tree(df.loc[right_idx], target.loc[right_idx],
-#                                               loss_fn,
-#                                               max_depth=max_depth,
-#                                               min_to_split=min_to_split,
-#                                               leaf_map=leaf_map,
-#                                               leaf_prediction_builder=leaf_prediction_builder,
-#                                               var_split_candidate_map=var_split_candidate_map,
-#                                               current_depth=current_depth + 1)
-#
-#     leaf_map.update(left_map)
-#     leaf_map.update(right_map)
-#
-#     return (BranchNode(var, split,
-#                        left_tree, right_tree),
-#             leaf_map)
 
 
 def calculate_leaf_map(tree, df, target, leaf_prediction_builder=leaf_good_rate_split_builder):
@@ -443,10 +359,11 @@ def evolve(df, target,
         # Alphas are trees that are greedily trained with a sample
         # of the rows in the dataset
         for i in range(alphas_per_generation):
-            evolution_logger.debug("Growing Alpha: {} of {}".format(i+1, alphas_per_generation))
-            df_alpha = df_train.sample(frac=0.5, replace=False, axis=0)
+            evolution_logger.debug("Growing Alpha: {} of {}".format(i + 1, alphas_per_generation))
+            df_alpha = sample(df_train, row_frac=0.5)
+            taraget_alpha = target_train.loc[df_alpha.index]
             tree, _ = train_greedy_tree(
-                df=df_alpha, target=target_train.loc[df_alpha.index],
+                df=df_alpha, target=taraget_alpha,
                 loss_fn=loss_fn,
                 max_depth=max_depth,
                 min_to_split=min_to_split,
@@ -456,7 +373,7 @@ def evolve(df, target,
 
         # Create the betas
         for i in range(betas_per_generation):
-            evolution_logger.debug("Growing Betea: {} of {}".format(i+1, betas_per_generation))
+            evolution_logger.debug("Growing Betea: {} of {}".format(i + 1, betas_per_generation))
             tree, _ = train_greedy_tree(
                 df=df_train, target=target_train,
                 loss_fn=loss_fn,
@@ -470,20 +387,15 @@ def evolve(df, target,
 
         # For each tree shape, calculate the leaf performance
         # on the full training data
-
         trees_and_leaf_map = [(tree, calculate_leaf_map(tree, df_train, target_train, leaf_prediction_builder))
                               for tree in trees]
 
         # Calculate the loss on the generation
         trees_and_losses = sorted_trees_and_losses(trees_and_leaf_map, df_test, target_test, loss_fn)
 
-        # trees_and_losses = [(tree, loss_fn(tree.predict(df_test, leaf_map), target_test))
-        #                    for tree, leaf_map in trees_and_leaf_map]
-        best_tree, loss_hold_out = trees_and_losses[0]  # = min([tree for tree, loss in trees_and_losses])
+        best_tree, loss_hold_out = trees_and_losses[0]
 
-        loss_training =  sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0][1]
-
-        # best_loss = min([loss for tree, loss in trees_and_losses])
+        loss_training = sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0][1]
 
         # Get the best of the generation to become parentts
         parents = [tree for tree, loss in trees_and_losses[:num_parents]]
@@ -496,7 +408,8 @@ def evolve(df, target,
 
         older_generation = parents + children
 
-        evolution_logger.info("Generation {} Training Loss: {} Hold Out Loss {}\n".format(gen_idx, loss_training, loss_hold_out))
+        evolution_logger.info(
+            "Generation {} Training Loss: {} Hold Out Loss {}\n".format(gen_idx, loss_training, loss_hold_out))
 
         generations.append({'loss_hold_out': loss_hold_out,
                             'loss_training': loss_training,
@@ -512,17 +425,23 @@ def sorted_trees_and_losses(trees_and_leaf_map, df, targets, loss_fn):
 
     return sorted(trees_and_losses, key=lambda x: x[1])
 
-#    best_tree = min([tree for tree, loss in trees_and_losses])
 
-#    best_loss = min([loss for tree, loss in trees_and_losses])
-
-
-# def sort_by_loss(trees_and_leaf_map, loss_fn, df, target):
-#    losses = []
-#
-#    for (tree, leaf_map) in trees_and_leaf_map:
-#        predictions = tree.predict(df, leaf_map)
-#        loss = loss_fn(predictions, target)
-#        losses.append((tree, loss))
-
-#    return
+def sample(df, row_frac=None, col_frac=None):
+    if len(df) == 0:
+        return df
+    elif row_frac is None and col_frac is None:
+        return df
+    elif row_frac is None:
+        ncols = int(math.floor(len(df.columns) * col_frac))
+        cols = random.sample(df.columns, ncols)
+        return df.loc[:, cols]
+    elif col_frac is None:
+        nrows = int(math.floor(len(df) * row_frac))
+        rows = random.sample(df.index, nrows)
+        return df.loc[rows, :]
+    else:
+        ncols = int(math.floor(len(df.columns) * col_frac))
+        cols = random.sample(df.columns, ncols)
+        nrows = int(math.floor(len(df) * row_frac))
+        rows = random.sample(df.index, nrows)
+        return df.loc[rows, cols]
