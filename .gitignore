@@ -2,3 +2,7 @@
 venv
 *.pyc
 .idea
+
+*.txt
+*.calltree
+*.profile

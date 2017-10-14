@@ -93,6 +93,8 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
     # Left is BAD
     # Right is GOOD
 
+    # TODO: Optimize me!
+
     srs = df[var]
 
     if candidates is None:
@@ -104,14 +106,20 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
     for val in candidates:
 
         left_idx = df.index[(srs <= val)]
-        left_leaf_predict_fn = leaf_prediction_builder(df.loc[left_idx], target.loc[left_idx])
-        left_predicted = left_leaf_predict_fn(df.loc[left_idx])
+        df_left = df.loc[left_idx]
+        target_left = target.loc[left_idx]
+        left_leaf_predict_fn = leaf_prediction_builder(df_left, target_left)
+        left_predicted = left_leaf_predict_fn(df_left)
 
         right_idx = df.index[(srs > val)]
-        right_leaf_predict_fn = leaf_prediction_builder(df.loc[right_idx], target.loc[right_idx])
-        right_predicted = right_leaf_predict_fn(df.loc[right_idx])
+        df_right = df.loc[right_idx]
+        target_right =  target.loc[right_idx]
+        right_leaf_predict_fn = leaf_prediction_builder(df_right, target_right)
+        right_predicted = right_leaf_predict_fn(df_right)
 
-        loss = loss_fn(left_predicted, target.loc[left_idx]) + loss_fn(right_predicted, target.loc[right_idx])
+        left_loss = loss_fn(left_predicted, target_left)
+        right_loss = loss_fn(right_predicted, target_right)
+        loss = (left_loss*len(left_idx) + right_loss*len(right_idx)) / (len(df))
 
         if best_loss is None or loss < best_loss:
             best_split = val
@@ -314,18 +322,18 @@ def cut(x, min, max):
         return x
 
 
-def accuracy_loss(predicted, truth, threshold=0.5):
+def error_rate_loss(predicted, truth, threshold=0.5):
     if len(truth) == 0:
         return 0.0
     else:
-        return len(truth) - np.sum((predicted >= threshold) == truth)
+        return 1.0 - np.mean((predicted >= threshold) == truth)
 
 
 def cross_entropy_loss(predicted, truth):
     if len(truth) == 0:
         return 0.0
     else:
-        return -1 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)
+        return (-1 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)).mean()
 
 
 def evolve(df, target,
@@ -345,7 +353,7 @@ def evolve(df, target,
     target_test = target.loc[df_test.index]
 
     # Create and cache the possible splits
-    var_split_candidate_map = {var: _get_split_candidates(df[var]) for var in df.columns}
+    var_split_candidate_map = {var: _get_split_candidates(df[var], threshold=20) for var in df.columns}
 
     generations = []
 
