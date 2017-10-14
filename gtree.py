@@ -25,7 +25,7 @@ class Node(object):
 
         for leaf_hash, df_leaf in df.groupby(leaf_for_row):
             predict_fn = leaf_score_map[leaf_hash]
-            predictions = df_leaf.apply(predict_fn, axis=1)
+            predictions = predict_fn(df_leaf)
             results.append(predictions)
 
         return pd.concat(results).loc[df.index]
@@ -74,11 +74,11 @@ class LeafNode(Node):
         print "Leaf({})\n".format(hash(self))
 
 
-def _get_split_candidates(srs, thrshold=100):
-    if len(srs) < 100:
+def _get_split_candidates(srs, threshold=100):
+    if len(srs) < threshold:
         return list(srs.values)
     else:
-        return list(pd.qcut(srs, 100, labels=False, retbins=True))[1]
+        return list(pd.qcut(srs, threshold, labels=False, retbins=True))[1]
 
 
 def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
@@ -98,11 +98,11 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
 
         left_idx = df.index[(srs <= val)]
         left_leaf_predict_fn = leaf_prediction_builder(df.loc[left_idx], target.loc[left_idx])
-        left_predicted = df.loc[left_idx].apply(left_leaf_predict_fn, axis=1)
+        left_predicted = left_leaf_predict_fn(df.loc[left_idx])
 
         right_idx = df.index[(srs > val)]
         right_leaf_predict_fn = leaf_prediction_builder(df.loc[right_idx], target.loc[right_idx])
-        right_predicted = df.loc[right_idx].apply(right_leaf_predict_fn, axis=1)
+        right_predicted = right_leaf_predict_fn(df.loc[right_idx])
 
         loss = loss_fn(left_predicted, target.loc[left_idx]) + loss_fn(right_predicted, target.loc[right_idx])
 
@@ -122,12 +122,14 @@ def get_best_split(df, target, loss_fn, leaf_prediction_builder, var_split_candi
     best_loss = None
 
     for var in df.columns:
+
         if var_split_candidate_map is not None:
             candidate = var_split_candidate_map.get(var, None)
         else:
             candidate = None
+
         split, loss = _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidate)
-        print "Loss for {} {} {}".format(var, split, loss)
+        # print "Loss for {} {} {}".format(var, split, loss)
         if best_loss is None or loss < best_loss:
             best_var = var
             best_split = split
@@ -136,7 +138,7 @@ def get_best_split(df, target, loss_fn, leaf_prediction_builder, var_split_candi
     return (best_var, best_split, best_loss)
 
 
-def leaf_good_rate(features, target):
+def leaf_good_rate_split_builder(features, target):
     """
     Assume the target consists of 0, 1
     """
@@ -144,15 +146,17 @@ def leaf_good_rate(features, target):
         mean = sum(target) / len(target)
     else:
         mean = 0
-    return lambda df: mean
+
+    return lambda df: pd.Series([mean for _ in range(len(df))], index=df.index)
 
 
 def train_greedy_tree(df, target, loss_fn,
                       max_depth=None,
                       min_to_split=None,
                       leaf_map=None,
-                      leaf_prediction_builder=leaf_good_rate,
-                      var_split_candidate_map=None):
+                      leaf_prediction_builder=leaf_good_rate_split_builder,
+                      var_split_candidate_map=None,
+                      current_depth=0):
     """
     Returns a tree and its leaf map
     """
@@ -164,45 +168,50 @@ def train_greedy_tree(df, target, loss_fn,
         leaf_map = {}
 
     predictor = leaf_prediction_builder(df, target)
-    predictions = df.apply(predictor, axis=1)
+    predictions = predictor(df)  # .apply(predictor, axis=1)
     current_loss = loss_fn(predictions, target)
 
-    if len(df) == 1 or (max_depth is not None and max_depth <= 0) or (
-            min_to_split is not None and len(df) < min_to_split):
+    if len(df) == 1 or (max_depth is not None and current_depth > max_depth) or (
+                    min_to_split is not None and len(df) < min_to_split):
+        print "Reached leaf node, or constraints force termination.  Returning"
         leaf = LeafNode()
         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
         return leaf, leaf_map
 
     var, split, loss = get_best_split(df, target, loss_fn, leaf_prediction_builder, var_split_candidate_map)
 
-    print "Training.  Depth {} Current Loss: {} Best Split: {} {} {}".format(max_depth,
+    print "Training.  Depth {} Current Loss: {} Best Split: {} {} {}".format(current_depth,
                                                                              current_loss,
                                                                              var,
                                                                              split,
                                                                              loss)
 
     if loss >= current_loss:
+        print "No split improves loss.  Returning"
         leaf = LeafNode()
         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
         return leaf, leaf_map
 
     left_idx = df[var] <= split
+    right_idx = df[var] > split
 
     left_tree, left_map = train_greedy_tree(df.loc[left_idx], target.loc[left_idx],
                                             loss_fn,
-                                            max_depth=max_depth - 1 if max_depth else None,
+                                            max_depth=max_depth,
                                             min_to_split=min_to_split,
                                             leaf_map=leaf_map,
                                             leaf_prediction_builder=leaf_prediction_builder,
-                                            var_split_candidate_map=var_split_candidate_map)
+                                            var_split_candidate_map=var_split_candidate_map,
+                                            current_depth=current_depth + 1)
 
-    right_tree, right_map = train_greedy_tree(df.loc[~left_idx], target.loc[~left_idx],
+    right_tree, right_map = train_greedy_tree(df.loc[right_idx], target.loc[right_idx],
                                               loss_fn,
-                                              max_depth=max_depth - 1 if max_depth else None,
+                                              max_depth=max_depth,
                                               min_to_split=min_to_split,
                                               leaf_map=leaf_map,
                                               leaf_prediction_builder=leaf_prediction_builder,
-                                              var_split_candidate_map=var_split_candidate_map)
+                                              var_split_candidate_map=var_split_candidate_map,
+                                              current_depth=current_depth + 1)
 
     leaf_map.update(left_map)
     leaf_map.update(right_map)
@@ -212,7 +221,7 @@ def train_greedy_tree(df, target, loss_fn,
             leaf_map)
 
 
-def calculate_leaf_map(tree, df, target, leaf_prediction_builder=leaf_good_rate):
+def calculate_leaf_map(tree, df, target, leaf_prediction_builder=leaf_good_rate_split_builder):
     leaf_map = {}
 
     leaves = tree.find_leaves(df)
@@ -294,23 +303,15 @@ def cut(x, min, max):
 
 
 def accuracy_loss(predicted, truth, threshold=0.5):
-    return -1 * np.mean((predicted >= threshold) * truth + (predicted < threshold) * (1 - truth))
+    if len(truth) == 0:
+        return 0.0
+    else:
+        return len(truth) - np.sum((predicted >= threshold) == truth)
 
 
-#def cross_entropy_loss(predicted, truth, threshold=0.5):
-#   return np.sum((predicted >= threshold) * np.log(predicted) + (predicted < threshold) * np.log(1.0 - predicted))
+def cross_entropy_loss(predicted, truth):
+    if len(truth) == 0:
+        return 0.0
+    else:
+        return -1 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)
 
-    # if len(predicted) == 0:
-    #     return 0
-
-    # loss = 0
-
-    # for (p, t) in zip(predicted, truth):
-
-    #     # Correct prediction
-    #     if (p >= threshold and t==1) or (p < threshold and t==0):
-    #         loss += math.log(cut(p, 0.001, 0.999))
-    #     else:
-    #         loss += math.log(cut(1.0-p, 0.001, 0.999))
-
-    # return loss
