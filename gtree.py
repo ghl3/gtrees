@@ -1,10 +1,17 @@
 from __future__ import division
 
+# mylib.py
+import logging
+
 import random
 import numpy as np
 import pandas as pd
 
 from abc import ABCMeta, abstractmethod
+
+
+tree_logger = logging.getLogger('tree')
+evolution_logger = logging.getLogger('evolution')
 
 
 class Node(object):
@@ -175,7 +182,7 @@ def train_greedy_tree(df, target, loss_fn,
 
     if len(df) == 1 or (max_depth is not None and current_depth > max_depth) or (
                     min_to_split is not None and len(df) < min_to_split):
-        print "Reached leaf node, or constraints force termination.  Returning"
+        tree_logger.info("Reached leaf node, or constraints force termination.  Returning")
         leaf = LeafNode()
         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
         return leaf, leaf_map
@@ -190,14 +197,15 @@ def train_greedy_tree(df, target, loss_fn,
     var, split, loss = get_best_split(df_for_splitting, target.loc[df_for_splitting.index],
                                       loss_fn, leaf_prediction_builder, var_split_candidate_map)
 
-    print "Training.  Depth {} Current Loss: {} Best Split: {} {} {}".format(current_depth,
-                                                                             current_loss,
-                                                                             var,
-                                                                             split,
-                                                                             loss)
+    tree_logger.info("Training.  Depth {} Current Loss: {} Best Split: {} {} {}".format(
+        current_depth,
+        current_loss,
+        var,
+        split,
+        loss))
 
     if loss >= current_loss:
-        print "No split improves loss.  Returning"
+        tree_logger.info("No split improves loss.  Returning")
         leaf = LeafNode()
         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
         return leaf, leaf_map
@@ -434,7 +442,8 @@ def evolve(df, target,
         # Create the alpha of this generation
         # Alphas are trees that are greedily trained with a sample
         # of the rows in the dataset
-        for _ in range(alphas_per_generation):
+        for i in range(alphas_per_generation):
+            evolution_logger.debug("Growing Alpha: {} of {}".format(i+1, alphas_per_generation))
             df_alpha = df_train.sample(frac=0.5, replace=False, axis=0)
             tree, _ = train_greedy_tree(
                 df=df_alpha, target=target_train.loc[df_alpha.index],
@@ -446,7 +455,8 @@ def evolve(df, target,
             trees.append(tree)
 
         # Create the betas
-        for _ in range(betas_per_generation):
+        for i in range(betas_per_generation):
+            evolution_logger.debug("Growing Betea: {} of {}".format(i+1, betas_per_generation))
             tree, _ = train_greedy_tree(
                 df=df_train, target=target_train,
                 loss_fn=loss_fn,
@@ -469,7 +479,9 @@ def evolve(df, target,
 
         # trees_and_losses = [(tree, loss_fn(tree.predict(df_test, leaf_map), target_test))
         #                    for tree, leaf_map in trees_and_leaf_map]
-        best_tree, best_loss = trees_and_losses[0]  # = min([tree for tree, loss in trees_and_losses])
+        best_tree, loss_hold_out = trees_and_losses[0]  # = min([tree for tree, loss in trees_and_losses])
+
+        loss_training =  sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0][1]
 
         # best_loss = min([loss for tree, loss in trees_and_losses])
 
@@ -483,10 +495,14 @@ def evolve(df, target,
             children.append(mate(mother, father))
 
         older_generation = parents + children
-        generations.append({'loss': best_loss,
+
+        evolution_logger.info("Generation {} Training Loss: {} Hold Out Loss {}\n".format(gen_idx, loss_training, loss_hold_out))
+
+        generations.append({'loss_hold_out': loss_hold_out,
+                            'loss_training': loss_training,
                             'generation': older_generation})
 
-    return best_tree, best_loss, generations
+    return best_tree, generations
 
 
 def sorted_trees_and_losses(trees_and_leaf_map, df, targets, loss_fn):
