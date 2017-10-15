@@ -380,7 +380,7 @@ def mate(mother, father):
     - Replace the node in the mother tree
     """
 
-    num_genes = random.randint(1, 3)
+    num_genes = random.randint(1, 4)
 
     child = mother
 
@@ -399,6 +399,26 @@ def mate(mother, father):
             child = replace_node(child, to_replace, replace_with)
 
     return child
+
+
+def mutate(tree, features):
+    tree = clone(tree)
+
+    num_mutations = random.choice([0, 0, 0, 1, 1, 2])
+
+    for gene in range(num_mutations):
+
+        if isinstance(tree, LeafNode):
+            return tree
+
+        if random.choice([True, False]):
+            to_mutate = random_branch_node(tree)
+            to_mutate.split = features[to_mutate.var_name].sample(n=1).iloc[0]
+        else:
+            to_mutate = random_branch_node(tree)
+            to_mutate.var_name = random.choice(features.columns)
+
+    return tree
 
 
 def prune(tree, max_depth=None, current_depth=0):
@@ -448,16 +468,13 @@ def cross_entropy_loss(predicted, truth):
         return (-1 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)).mean()
 
 
-def evolve(df, target,
-           loss_fn,
-           max_depth=None,
-           min_to_split=None,
-           leaf_prediction_builder=leaf_good_rate_split_builder,
-           num_generations=10,
-           alphas_per_generation=20,
-           betas_per_generation=20,
-           num_parents=5,
-           num_children=5):
+def train_random_trees(df, target,
+                       loss_fn,
+                       max_depth=None,
+                       min_to_split=None,
+                       leaf_prediction_builder=leaf_good_rate_split_builder,
+                       num_trees=10,
+                       num_split_candidates=50):
     df_train = df.sample(frac=0.7, replace=False, axis=0)
     target_train = target.loc[df_train.index]
 
@@ -465,21 +482,17 @@ def evolve(df, target,
     target_test = target.loc[df_test.index]
 
     # Create and cache the possible splits
-    var_split_candidate_map = {var: _get_split_candidates(df[var], threshold=20) for var in df.columns}
+    var_split_candidate_map = {var: _get_split_candidates(df[var], threshold=num_split_candidates) for var in
+                               df.columns}
 
-    generations = []
+    trees = []
 
-    older_generation = []
+    num_grown_trees = 0
 
-    for gen_idx in range(num_generations):
+    while num_grown_trees < num_trees:
 
-        trees = list(older_generation)
+        if random.choice([True, False]):
 
-        # Create the alpha of this generation
-        # Alphas are trees that are greedily trained with a sample
-        # of the rows in the dataset
-        for i in range(alphas_per_generation):
-            evolution_logger.debug("Growing Alpha: {} of {}".format(i + 1, alphas_per_generation))
             df_alpha = sample(df_train, row_frac=0.5)
             target_alpha = target_train.loc[df_alpha.index]
             tree, _ = train_greedy_tree(
@@ -490,10 +503,9 @@ def evolve(df, target,
                 leaf_prediction_builder=leaf_prediction_builder,
                 var_split_candidate_map=var_split_candidate_map)
             trees.append(('alpha', tree))
+            num_grown_trees += 1
 
-        # Create the betas
-        for i in range(betas_per_generation):
-            evolution_logger.debug("Growing Beta: {} of {}".format(i + 1, betas_per_generation))
+        else:
             tree, _ = train_greedy_tree(
                 df=df_train, target=target_train,
                 loss_fn=loss_fn,
@@ -504,6 +516,7 @@ def evolve(df, target,
                 row_sample_rate=0.5,
                 var_split_candidate_map=var_split_candidate_map)
             trees.append(('beta', tree))
+            num_grown_trees += 1
 
         # For each tree shape, calculate the leaf performance
         # on the full training data
@@ -511,47 +524,144 @@ def evolve(df, target,
                               for type, tree in trees]
 
         # Calculate the loss on the generation
-        trees_and_losses = sorted_trees_and_losses(trees_and_leaf_map, df_test, target_test, loss_fn)
+        results = calculate_sorted_losses(trees, leaf_prediction_builder, loss_fn,
+                                          df_train, target_train,
+                                          df_test, target_test)
 
-        best_type, best_tree, loss_hold_out = trees_and_losses[0]
+        best_result = results[0]
 
-        _, _, loss_training = sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0]
+        #best_type, best_tree, loss_hold_out = \
+        #    sorted_trees_and_losses(trees_and_leaf_map, df_test, target_test, loss_fn)[0]
+        #_, _, loss_training = sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0]
 
-        # Get the best of the generation to become parents
-        parents = [(type, tree, loss) for type, tree, loss in trees_and_losses[:num_parents]]
+        evolution_logger.info("Num Trees: {} Training Loss: {:.4f} Hold Out Loss {:.4f}\n".format(
+            num_grown_trees,
+            best_result['loss_training'],
+            best_result['loss_testing']))
 
-        evolution_logger.debug("Surviving Generation: {}".format(", ".join(['{}:{:.4f}'.format(type, loss)
-                                                                            for type, tree, loss in parents])))
+    return best_result
+
+
+def evolve(df, target,
+           loss_fn,
+           max_depth=None,
+           min_to_split=None,
+           leaf_prediction_builder=leaf_good_rate_split_builder,
+           num_generations=10,
+           alphas_per_generation=20,
+           betas_per_generation=20,
+           num_parents=10,
+           num_children=50,
+           num_split_candidates=50):
+    df_train = df.sample(frac=0.7, replace=False, axis=0)
+    target_train = target.loc[df_train.index]
+
+    # df_test = df[~df.index.isin(df_train.index)]
+    # target_test = target.loc[df_test.index]
+
+    # Create and cache the possible splits
+    var_split_candidate_map = {var: _get_split_candidates(df[var], threshold=num_split_candidates) for var in
+                               df.columns}
+
+    generations = []
+
+    older_generation = []
+
+    # Create the alpha of this generation
+    # Alphas are trees that are greedily trained with a sample
+    # of the rows in the dataset
+    for i in range(alphas_per_generation):
+        evolution_logger.debug("Growing Alpha: {} of {}".format(i + 1, alphas_per_generation))
+        df_alpha = sample(df_train, row_frac=0.5)
+        target_alpha = target_train.loc[df_alpha.index]
+        tree, _ = train_greedy_tree(
+            df=df_alpha, target=target_alpha,
+            loss_fn=loss_fn,
+            max_depth=max_depth,
+            min_to_split=min_to_split,
+            leaf_prediction_builder=leaf_prediction_builder,
+            var_split_candidate_map=var_split_candidate_map)
+        older_generation.append((0, tree))
+
+    # Create the betas
+    for i in range(betas_per_generation):
+        evolution_logger.debug("Growing Beta: {} of {}".format(i + 1, betas_per_generation))
+        tree, _ = train_greedy_tree(
+            df=df_train, target=target_train,
+            loss_fn=loss_fn,
+            max_depth=max_depth,
+            min_to_split=min_to_split,
+            leaf_prediction_builder=leaf_prediction_builder,
+            feature_sample_rate=0.5,
+            row_sample_rate=0.5,
+            var_split_candidate_map=var_split_candidate_map)
+        older_generation.append((0, tree))
+
+    for gen_idx in range(num_generations):
+
+        # Re-split the dataset
+        evolution_logger.debug("Resplitting the data")
+        df_train = df.sample(frac=0.7, replace=False, axis=0)
+        target_train = target.loc[df_train.index]
+
+        df_test = df[~df.index.isin(df_train.index)]
+        target_test = target.loc[df_test.index]
+
+        trees = list(older_generation)
+
+        results = calculate_sorted_losses(trees, leaf_prediction_builder, loss_fn,
+                                          df_train, target_train,
+                                          df_test, target_test)
+
+        best_result = results[0]
+
+        parents = results[:num_parents]
+
+        evolution_logger.debug(
+            "Surviving Generation: {}".format(", ".join(['{}:{:.4f}'.format(r['type'], r['loss_testing'])
+                                                         for r in parents])))
 
         # Create the children
         evolution_logger.debug("Mating to create {} children".format(num_children))
 
         children = []
         for _ in range(num_children):
-            (momtype, mother, _), (dadtype, father, _) = random.sample(parents, 2)  # , weights=[pyp[2] for p in parents])
-            child = mate(mother, father)
+            mother, father = random.sample(parents, 2)
+            child = mate(mother['tree'], father['tree'])
+            child = mutate(child, df_train)
             child = prune(child, max_depth=max_depth)
             if child not in children:
-                children.append(('child', child))
+                children.append((max(mother['type'], father['type']) + 1, child))
 
-        older_generation = [(type, tree) for type, tree, _ in parents] + children
+        older_generation = [(p['type'], p['tree']) for p in parents] + children
 
         evolution_logger.info(
-            "Generation {} Training Loss: {:.4f} Hold Out Loss {:.4f}\n".format(gen_idx, loss_training, loss_hold_out))
+            "Generation {} Training Loss: {:.4f} Hold Out Loss {:.4f}\n".format(gen_idx,
+                                                                                best_result['loss_training'],
+                                                                                best_result['loss_testing']))
 
-        generations.append({'loss_hold_out': loss_hold_out,
-                            'loss_training': loss_training,
+        generations.append({'best_of_generaton': best_result,
                             'generation': older_generation})
 
-    return best_tree, generations
+    return best_result, generations
 
 
-def sorted_trees_and_losses(trees_and_leaf_map, df, targets, loss_fn):
-    # Calculate the loss on the generation
-    trees_and_losses = [(type, tree, loss_fn(tree.predict(df, leaf_map), targets))
-                        for type, tree, leaf_map in trees_and_leaf_map]
+def calculate_sorted_losses(trees, leaf_prediction_builder, loss_fn, df_train, target_train, df_test, target_test):
+    results = []
 
-    return sorted(trees_and_losses, key=lambda x: x[2])
+    for type, tree in trees:
+        # Calculate the leaf map on the training data
+        leaf_map = calculate_leaf_map(tree, df_train, target_train, leaf_prediction_builder)
+
+        training_loss = loss_fn(tree.predict(df_train, leaf_map), target_train)
+        testing_loss = loss_fn(tree.predict(df_test, leaf_map), target_test)
+
+        results.append({'tree': tree, 'type': type,
+                        'loss_training': training_loss,
+                        'loss_testing': testing_loss})
+
+    return sorted(results, key=lambda x: x['loss_testing'])
+
 
 
 def sample(df, row_frac=None, col_frac=None):
