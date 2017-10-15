@@ -327,31 +327,6 @@ def replace_branch_split(tree, to_replace, replace_with):
     return tree
 
 
-
-    # elif tree == to_replace:
-    #     tree = clone(tree)
-    #     tree.left = replace_with.var_name
-    #     tree.right = replace_with.split
-    #     return tree
-    # else:
-    #
-    #     if tree.left == to_replace:
-    #         tree.left = replace_with
-    #         return tree
-    #     elif tree.right == to_replace:
-    #         tree.right = replace_with
-    #         return tree
-    #     else:
-    #         replace_node(tree.left, to_replace, replace_with)
-    #         replace_node(tree.right, to_replace, replace_with)
-    #         return tree
-    #
-    #
-    # to_replace.var_name = replace_with.var_name
-    # to_replace.split = replace_with.split
-    # return tree
-
-
 def replace_node(tree, to_replace, replace_with):
     """
     Takes a tree and a node in that tree to replace
@@ -394,32 +369,6 @@ def replace_node(tree, to_replace, replace_with):
     return tree
 
 
-
-    #     if node == to_replace:
-    #         node.var_name = replace_with.var_name
-    #         node.split = replace_with.split
-    #         return tree
-    #
-    #
-    # elif isinstance(tree, LeafNode):
-    #     return tree
-    #
-    # else:
-    #
-    #     if tree.left == to_replace:
-    #         tree = clone(tree)
-    #         tree.left = clone(replace_with)
-    #         return tree
-    #     elif tree.right == to_replace:
-    #         tree = clone(tree)
-    #         tree.right = clone(replace_with)
-    #         return tree
-    #     else:
-    #         tree = replace_node(tree.left, to_replace, replace_with)
-    #         tree = replace_node(tree.right, to_replace, replace_with)
-    #         return tree
-
-
 def mate(mother, father):
     """
     Create a child tree from two parent trees.
@@ -431,7 +380,7 @@ def mate(mother, father):
     - Replace the node in the mother tree
     """
 
-    num_genes = random.randint(1, 2)
+    num_genes = random.randint(1, 3)
 
     child = mother
 
@@ -509,7 +458,6 @@ def evolve(df, target,
            betas_per_generation=20,
            num_parents=5,
            num_children=5):
-
     df_train = df.sample(frac=0.7, replace=False, axis=0)
     target_train = target.loc[df_train.index]
 
@@ -533,9 +481,9 @@ def evolve(df, target,
         for i in range(alphas_per_generation):
             evolution_logger.debug("Growing Alpha: {} of {}".format(i + 1, alphas_per_generation))
             df_alpha = sample(df_train, row_frac=0.5)
-            taraget_alpha = target_train.loc[df_alpha.index]
+            target_alpha = target_train.loc[df_alpha.index]
             tree, _ = train_greedy_tree(
-                df=df_alpha, target=taraget_alpha,
+                df=df_alpha, target=target_alpha,
                 loss_fn=loss_fn,
                 max_depth=max_depth,
                 min_to_split=min_to_split,
@@ -580,10 +528,11 @@ def evolve(df, target,
 
         children = []
         for _ in range(num_children):
-            (momtype, mother, _), (dadtype, father, _) = random.sample(parents, 2) #, weights=[pyp[2] for p in parents])
+            (momtype, mother, _), (dadtype, father, _) = random.sample(parents, 2)  # , weights=[pyp[2] for p in parents])
             child = mate(mother, father)
             child = prune(child, max_depth=max_depth)
-            children.append(('child', child))
+            if child not in children:
+                children.append(('child', child))
 
         older_generation = [(type, tree) for type, tree, _ in parents] + children
 
