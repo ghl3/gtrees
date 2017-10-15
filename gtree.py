@@ -65,10 +65,17 @@ class BranchNode(Node):
         if self.right:
             self.right.prn(indent + 1)
 
+    def __eq__(self, o):
+        return isinstance(o,
+                          BranchNode) and self.var_name == o.var_name and self.split == o.split and self.left == o.left and self.right == o.right
+
+    def __hash__(self):
+        return hash((self.var_name, self.split, self.left, self.right))
+
 
 class LeafNode(Node):
     def __init__(self):
-        pass
+        self._code = random.random()
 
     def find_leaves(self, df):
         return pd.Series(hash(self), index=df.index)
@@ -78,7 +85,13 @@ class LeafNode(Node):
 
         for _ in range(indent):
             print '\t',
-        print "Leaf({})\n".format(hash(self))
+        print "Leaf({})\n".format(self._code)
+
+    def __eq__(self, o):
+        return isinstance(o, LeafNode) and self._code == o._code
+
+    def __hash__(self):
+        return hash(self._code)
 
 
 def _get_split_candidates(srs, threshold=100):
@@ -100,6 +113,9 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
     if candidates is None:
         candidates = _get_split_candidates(srs)
 
+    if len(srs) <= len(candidates):
+        candidates = srs.values
+
     best_loss = None
     best_split = None
 
@@ -113,13 +129,13 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
 
         right_idx = df.index[(srs > val)]
         df_right = df.loc[right_idx]
-        target_right =  target.loc[right_idx]
+        target_right = target.loc[right_idx]
         right_leaf_predict_fn = leaf_prediction_builder(df_right, target_right)
         right_predicted = right_leaf_predict_fn(df_right)
 
         left_loss = loss_fn(left_predicted, target_left)
         right_loss = loss_fn(right_predicted, target_right)
-        loss = (left_loss*len(left_idx) + right_loss*len(right_idx)) / (len(df))
+        loss = (left_loss * len(left_idx) + right_loss * len(right_idx)) / (len(df))
 
         if best_loss is None or loss < best_loss:
             best_split = val
@@ -184,10 +200,10 @@ def train_greedy_tree(df, target, loss_fn,
         leaf_map = {}
 
     predictor = leaf_prediction_builder(df, target)
-    predictions = predictor(df)  # .apply(predictor, axis=1)
+    predictions = predictor(df)
     current_loss = loss_fn(predictions, target)
 
-    if len(df) == 1 or (max_depth is not None and current_depth > max_depth) or (
+    if len(df) <= 1 or (max_depth is not None and current_depth > max_depth) or (
                     min_to_split is not None and len(df) < min_to_split):
         tree_logger.info("Reached leaf node, or constraints force termination.  Returning")
         leaf = LeafNode()
@@ -199,7 +215,7 @@ def train_greedy_tree(df, target, loss_fn,
     var, split, loss = get_best_split(df_for_splitting, target.loc[df_for_splitting.index],
                                       loss_fn, leaf_prediction_builder, var_split_candidate_map)
 
-    tree_logger.info("Training.  Depth {} Current Loss: {} Best Split: {} {} {}".format(
+    tree_logger.info("Training.  Depth {} Current Loss: {:.4f} Best Split: {} {:.4f} {:.4f}".format(
         current_depth,
         current_loss,
         var,
@@ -256,14 +272,16 @@ def get_all_nodes(tree):
     if isinstance(tree, LeafNode):
         return [tree]
     elif isinstance(tree, BranchNode):
-        return [tree.left] + [tree.right] + get_all_nodes(tree.left) + get_all_nodes(tree.right)
+        return [tree] + [tree.left] + [tree.right] + get_all_nodes(tree.left) + get_all_nodes(tree.right)
     else:
         raise ValueError()
 
 
 def clone(tree):
     if isinstance(tree, LeafNode):
-        return LeafNode()
+        c = LeafNode()
+        c._code = tree._code
+        return c
     elif isinstance(tree, BranchNode):
         return BranchNode(tree.var_name, tree.split, clone(tree.left), clone(tree.right))
     else:
@@ -274,24 +292,132 @@ def random_node(tree):
     return random.choice(get_all_nodes(tree))
 
 
+def random_branch_node(tree):
+    if isinstance(tree, LeafNode):
+        raise ValueError()
+
+    while True:
+        node = random.choice(get_all_nodes(tree))
+        if isinstance(node, BranchNode):
+            return node
+
+
+def replace_branch_split(tree, to_replace, replace_with):
+    """
+    Takes a tree and a node in that tree to replace
+    and a node to replace it with.
+    Replace that node in a shallow or "in-place" way by
+    replacing that node's variable and threshold but keeping
+    it's children the same
+
+    This mutates the tree in-place and returns the updated version
+    """
+
+    if isinstance(to_replace, LeafNode):
+        raise ValueError("Cannot call replace_branch_split on a LeafNode")
+
+    tree = clone(tree)
+
+    for node in get_all_nodes(tree):
+        if node == to_replace:
+            node.var_name = replace_with.var_name
+            node.split = replace_with.split
+            return tree
+
+    return tree
+
+
+
+    # elif tree == to_replace:
+    #     tree = clone(tree)
+    #     tree.left = replace_with.var_name
+    #     tree.right = replace_with.split
+    #     return tree
+    # else:
+    #
+    #     if tree.left == to_replace:
+    #         tree.left = replace_with
+    #         return tree
+    #     elif tree.right == to_replace:
+    #         tree.right = replace_with
+    #         return tree
+    #     else:
+    #         replace_node(tree.left, to_replace, replace_with)
+    #         replace_node(tree.right, to_replace, replace_with)
+    #         return tree
+    #
+    #
+    # to_replace.var_name = replace_with.var_name
+    # to_replace.split = replace_with.split
+    # return tree
+
+
 def replace_node(tree, to_replace, replace_with):
+    """
+    Takes a tree and a node in that tree to replace
+    and a node to replace it with.
+    Replace that node in a deep way by removing the
+    original node fro the tree and replacing it with
+    the replacement node (including it's children).
+
+    This may even replace leaf nodes, so it may alter
+    the structure of the tree.
+
+    This may mutates the tree in-place and always returns the updated version
+    """
+
+    # Handle the case where we replace the root
     if tree == to_replace:
-        return replace_with
+        return clone(replace_with)
 
-    elif isinstance(tree, BranchNode):
-        if tree.left == to_replace:
-            tree.left = replace_with
-            return tree
-        elif tree.right == to_replace:
-            tree.right = replace_with
-            return tree
-        else:
-            replace_node(tree.left, to_replace, replace_with)
-            replace_node(tree.right, to_replace, replace_with)
-            return tree
+    tree = clone(tree)
 
-    else:
-        return tree
+    # Otherwise, find it in the tree
+    for node in get_all_nodes(tree):
+
+        if isinstance(node, LeafNode):
+            continue
+
+        elif isinstance(node, BranchNode):
+
+            if node.left == to_replace:
+                node.left = replace_with
+                return tree
+
+            elif node.right == to_replace:
+                node.right = replace_with
+                return tree
+
+            else:
+                pass
+
+    return tree
+
+
+
+    #     if node == to_replace:
+    #         node.var_name = replace_with.var_name
+    #         node.split = replace_with.split
+    #         return tree
+    #
+    #
+    # elif isinstance(tree, LeafNode):
+    #     return tree
+    #
+    # else:
+    #
+    #     if tree.left == to_replace:
+    #         tree = clone(tree)
+    #         tree.left = clone(replace_with)
+    #         return tree
+    #     elif tree.right == to_replace:
+    #         tree = clone(tree)
+    #         tree.right = clone(replace_with)
+    #         return tree
+    #     else:
+    #         tree = replace_node(tree.left, to_replace, replace_with)
+    #         tree = replace_node(tree.right, to_replace, replace_with)
+    #         return tree
 
 
 def mate(mother, father):
@@ -305,12 +431,49 @@ def mate(mother, father):
     - Replace the node in the mother tree
     """
 
-    child = clone(mother)
+    num_genes = random.randint(1, 2)
 
-    to_replace = random_node(child)
-    replace_with = clone(random_node(father))
+    child = mother
 
-    return replace_node(child, to_replace, replace_with)
+    for gene in range(num_genes):
+
+        if isinstance(child, LeafNode):
+            return child
+
+        if random.choice([True, False]):
+            to_replace = random_branch_node(child)
+            replace_with = random_branch_node(father)
+            child = replace_branch_split(child, to_replace, replace_with)
+        else:
+            to_replace = random_node(child)
+            replace_with = random_node(father)
+            child = replace_node(child, to_replace, replace_with)
+
+    return child
+
+
+def prune(tree, max_depth=None, current_depth=0):
+    """
+    Return a (possibly cloned) version of the tree
+    that is pruned to respect the max depth given.
+    """
+
+    if isinstance(tree, LeafNode):
+        return tree
+
+    else:
+
+        tree = clone(tree)
+
+        # Force all children to be leaf node
+        if current_depth == max_depth - 1:
+            tree.left = LeafNode()
+            tree.right = LeafNode()
+            return tree
+        else:
+            tree.left = prune(tree.left, max_depth, current_depth + 1)
+            tree.right = prune(tree.right, max_depth, current_depth + 1)
+            return tree
 
 
 def cut(x, min, max):
@@ -346,6 +509,7 @@ def evolve(df, target,
            betas_per_generation=20,
            num_parents=5,
            num_children=5):
+
     df_train = df.sample(frac=0.7, replace=False, axis=0)
     target_train = target.loc[df_train.index]
 
@@ -377,11 +541,11 @@ def evolve(df, target,
                 min_to_split=min_to_split,
                 leaf_prediction_builder=leaf_prediction_builder,
                 var_split_candidate_map=var_split_candidate_map)
-            trees.append(tree)
+            trees.append(('alpha', tree))
 
         # Create the betas
         for i in range(betas_per_generation):
-            evolution_logger.debug("Growing Betea: {} of {}".format(i + 1, betas_per_generation))
+            evolution_logger.debug("Growing Beta: {} of {}".format(i + 1, betas_per_generation))
             tree, _ = train_greedy_tree(
                 df=df_train, target=target_train,
                 loss_fn=loss_fn,
@@ -391,33 +555,40 @@ def evolve(df, target,
                 feature_sample_rate=0.5,
                 row_sample_rate=0.5,
                 var_split_candidate_map=var_split_candidate_map)
-            trees.append(tree)
+            trees.append(('beta', tree))
 
         # For each tree shape, calculate the leaf performance
         # on the full training data
-        trees_and_leaf_map = [(tree, calculate_leaf_map(tree, df_train, target_train, leaf_prediction_builder))
-                              for tree in trees]
+        trees_and_leaf_map = [(type, tree, calculate_leaf_map(tree, df_train, target_train, leaf_prediction_builder))
+                              for type, tree in trees]
 
         # Calculate the loss on the generation
         trees_and_losses = sorted_trees_and_losses(trees_and_leaf_map, df_test, target_test, loss_fn)
 
-        best_tree, loss_hold_out = trees_and_losses[0]
+        best_type, best_tree, loss_hold_out = trees_and_losses[0]
 
-        loss_training = sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0][1]
+        _, _, loss_training = sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0]
 
-        # Get the best of the generation to become parentts
-        parents = [tree for tree, loss in trees_and_losses[:num_parents]]
+        # Get the best of the generation to become parents
+        parents = [(type, tree, loss) for type, tree, loss in trees_and_losses[:num_parents]]
+
+        evolution_logger.debug("Surviving Generation: {}".format(", ".join(['{}:{:.4f}'.format(type, loss)
+                                                                            for type, tree, loss in parents])))
 
         # Create the children
+        evolution_logger.debug("Mating to create {} children".format(num_children))
+
         children = []
         for _ in range(num_children):
-            mother, father = random.sample(parents, 2)
-            children.append(mate(mother, father))
+            (momtype, mother, _), (dadtype, father, _) = random.sample(parents, 2) #, weights=[pyp[2] for p in parents])
+            child = mate(mother, father)
+            child = prune(child, max_depth=max_depth)
+            children.append(('child', child))
 
-        older_generation = parents + children
+        older_generation = [(type, tree) for type, tree, _ in parents] + children
 
         evolution_logger.info(
-            "Generation {} Training Loss: {} Hold Out Loss {}\n".format(gen_idx, loss_training, loss_hold_out))
+            "Generation {} Training Loss: {:.4f} Hold Out Loss {:.4f}\n".format(gen_idx, loss_training, loss_hold_out))
 
         generations.append({'loss_hold_out': loss_hold_out,
                             'loss_training': loss_training,
@@ -428,10 +599,10 @@ def evolve(df, target,
 
 def sorted_trees_and_losses(trees_and_leaf_map, df, targets, loss_fn):
     # Calculate the loss on the generation
-    trees_and_losses = [(tree, loss_fn(tree.predict(df, leaf_map), targets))
-                        for tree, leaf_map in trees_and_leaf_map]
+    trees_and_losses = [(type, tree, loss_fn(tree.predict(df, leaf_map), targets))
+                        for type, tree, leaf_map in trees_and_leaf_map]
 
-    return sorted(trees_and_losses, key=lambda x: x[1])
+    return sorted(trees_and_losses, key=lambda x: x[2])
 
 
 def sample(df, row_frac=None, col_frac=None):
