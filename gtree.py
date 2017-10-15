@@ -203,7 +203,7 @@ def train_greedy_tree(df, target, loss_fn,
     predictions = predictor(df)
     current_loss = loss_fn(predictions, target)
 
-    if len(df) <= 1 or (max_depth is not None and current_depth > max_depth) or (
+    if len(df) <= 1 or (max_depth is not None and current_depth >= max_depth) or (
                     min_to_split is not None and len(df) < min_to_split):
         tree_logger.info("Reached leaf node, or constraints force termination.  Returning")
         leaf = LeafNode()
@@ -404,7 +404,7 @@ def mate(mother, father):
 def mutate(tree, features):
     tree = clone(tree)
 
-    num_mutations = random.choice([0, 0, 0, 1, 1, 2])
+    num_mutations = random.choice([0, 0, 0, 1, 1, 2, 3])
 
     for gene in range(num_mutations):
 
@@ -530,9 +530,9 @@ def train_random_trees(df, target,
 
         best_result = results[0]
 
-        #best_type, best_tree, loss_hold_out = \
+        # best_type, best_tree, loss_hold_out = \
         #    sorted_trees_and_losses(trees_and_leaf_map, df_test, target_test, loss_fn)[0]
-        #_, _, loss_training = sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0]
+        # _, _, loss_training = sorted_trees_and_losses(trees_and_leaf_map, df_train, target_train, loss_fn)[0]
 
         evolution_logger.info("Num Trees: {} Training Loss: {:.4f} Hold Out Loss {:.4f}\n".format(
             num_grown_trees,
@@ -548,9 +548,7 @@ def evolve(df, target,
            min_to_split=None,
            leaf_prediction_builder=leaf_good_rate_split_builder,
            num_generations=10,
-           alphas_per_generation=20,
-           betas_per_generation=20,
-           num_parents=10,
+           num_survivors=10,
            num_children=50,
            num_split_candidates=50):
     df_train = df.sample(frac=0.7, replace=False, axis=0)
@@ -567,11 +565,14 @@ def evolve(df, target,
 
     older_generation = []
 
+    num_seed_alphas = num_survivors // 2
+    num_seed_betas = num_survivors - num_seed_alphas
+
     # Create the alpha of this generation
     # Alphas are trees that are greedily trained with a sample
     # of the rows in the dataset
-    for i in range(alphas_per_generation):
-        evolution_logger.debug("Growing Alpha: {} of {}".format(i + 1, alphas_per_generation))
+    for i in range(num_seed_alphas):
+        evolution_logger.debug("Growing Alpha: {} of {}".format(i + 1, num_seed_alphas))
         df_alpha = sample(df_train, row_frac=0.5)
         target_alpha = target_train.loc[df_alpha.index]
         tree, _ = train_greedy_tree(
@@ -584,8 +585,8 @@ def evolve(df, target,
         older_generation.append((0, tree))
 
     # Create the betas
-    for i in range(betas_per_generation):
-        evolution_logger.debug("Growing Beta: {} of {}".format(i + 1, betas_per_generation))
+    for i in range(num_seed_betas):
+        evolution_logger.debug("Growing Beta: {} of {}".format(i + 1, num_seed_betas))
         tree, _ = train_greedy_tree(
             df=df_train, target=target_train,
             loss_fn=loss_fn,
@@ -607,41 +608,41 @@ def evolve(df, target,
         df_test = df[~df.index.isin(df_train.index)]
         target_test = target.loc[df_test.index]
 
-        trees = list(older_generation)
-
-        results = calculate_sorted_losses(trees, leaf_prediction_builder, loss_fn,
-                                          df_train, target_train,
-                                          df_test, target_test)
-
-        best_result = results[0]
-
-        parents = results[:num_parents]
-
-        evolution_logger.debug(
-            "Surviving Generation: {}".format(", ".join(['{}:{:.4f}'.format(r['type'], r['loss_testing'])
-                                                         for r in parents])))
-
         # Create the children
         evolution_logger.debug("Mating to create {} children".format(num_children))
 
         children = []
         for _ in range(num_children):
-            mother, father = random.sample(parents, 2)
-            child = mate(mother['tree'], father['tree'])
+            (mother_gen, mother), (father_gen, father) = random.sample(older_generation, 2)
+            child = mate(mother, father)
             child = mutate(child, df_train)
             child = prune(child, max_depth=max_depth)
             if child not in children:
-                children.append((max(mother['type'], father['type']) + 1, child))
+                children.append((max(mother_gen, father_gen) + 1, child))
 
-        older_generation = [(p['type'], p['tree']) for p in parents] + children
+        generation = list(older_generation) + children
+
+        results = calculate_sorted_losses(generation, leaf_prediction_builder, loss_fn,
+                                          df_train, target_train,
+                                          df_test, target_test)
+
+        best_result = results[0]
+
+        survivors = results[:num_survivors]
+
+        evolution_logger.debug(
+            "Surviving Generation: {}".format(", ".join(['{}:{:.4f}'.format(r['type'], r['loss_testing'])
+                                                         for r in survivors])))
 
         evolution_logger.info(
             "Generation {} Training Loss: {:.4f} Hold Out Loss {:.4f}\n".format(gen_idx,
                                                                                 best_result['loss_training'],
                                                                                 best_result['loss_testing']))
 
-        generations.append({'best_of_generaton': best_result,
-                            'generation': older_generation})
+        generations.append({'best_of_generation': best_result,
+                            'generation': survivors})
+
+        older_generation = [(s['type'], s['tree']) for s in survivors]
 
     return best_result, generations
 
@@ -661,7 +662,6 @@ def calculate_sorted_losses(trees, leaf_prediction_builder, loss_fn, df_train, t
                         'loss_testing': testing_loss})
 
     return sorted(results, key=lambda x: x['loss_testing'])
-
 
 
 def sample(df, row_frac=None, col_frac=None):
