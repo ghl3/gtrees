@@ -37,6 +37,10 @@ class Node(object):
 
         return pd.concat(results).loc[df.index]
 
+    @abstractmethod
+    def structure_matches(self, other):
+        raise NotImplemented()
+
 
 class BranchNode(Node):
     def __init__(self, var_name, split, left, right):
@@ -66,11 +70,21 @@ class BranchNode(Node):
             self.right.prn(indent + 1)
 
     def __eq__(self, o):
-        return isinstance(o,
-                          BranchNode) and self.var_name == o.var_name and self.split == o.split and self.left == o.left and self.right == o.right
+        return isinstance(o, BranchNode) \
+               and self.var_name == o.var_name \
+               and self.split == o.split \
+               and self.left == o.left \
+               and self.right == o.right
 
     def __hash__(self):
         return hash((self.var_name, self.split, self.left, self.right))
+
+    def structure_matches(self, o):
+        return isinstance(o, BranchNode) \
+               and self.var_name == o.var_name \
+               and self.split == o.split \
+               and self.left.structure_matches(o.left) \
+               and self.right.structure_matches(o.right)
 
 
 class LeafNode(Node):
@@ -85,13 +99,16 @@ class LeafNode(Node):
 
         for _ in range(indent):
             print '\t',
-        print "Leaf({})\n".format(self._code)
+        print "Leaf(id={})\n".format(self._code)
 
     def __eq__(self, o):
         return isinstance(o, LeafNode) and self._code == o._code
 
     def __hash__(self):
         return hash(self._code)
+
+    def structure_matches(self, other):
+        return isinstance(other, LeafNode)
 
 
 def _get_split_candidates(srs, threshold=100):
@@ -185,6 +202,12 @@ def leaf_good_rate_split_builder(features, target):
     return lambda df: pd.Series([mean for _ in range(len(df))], index=df.index)
 
 
+def softmax(x):
+    """Compute softmax values for each sets of scores in x."""
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+
+
 def train_greedy_tree(df, target, loss_fn,
                       max_depth=None,
                       min_to_split=None,
@@ -261,6 +284,12 @@ def train_greedy_tree(df, target, loss_fn,
 
 
 def calculate_leaf_map(tree, df, target, leaf_prediction_builder=leaf_good_rate_split_builder):
+    """
+    Takes a built tree structure and a features/target pair
+    and returns a map of each leaf to the function evaluating
+    the score at each leaf
+    """
+
     leaf_map = {}
 
     leaves = tree.find_leaves(df)
@@ -268,6 +297,7 @@ def calculate_leaf_map(tree, df, target, leaf_prediction_builder=leaf_good_rate_
     for leaf_hash, leaf_rows in df.groupby(leaves):
         leaf_targets = target.loc[leaf_rows.index]
         leaf_map[leaf_hash] = leaf_prediction_builder(leaf_rows, leaf_targets)
+
     return leaf_map
 
 
@@ -404,22 +434,48 @@ def mate(mother, father):
     return child
 
 
-def mutate(tree, features, mutation_rate=1.0):
+def mutate(tree, df, target, loss_fn, leaf_prediction_builder, mutation_rate=1.0):
+    # Can't mutate leaf nodes
+    if isinstance(tree, LeafNode):
+        return tree
+
     tree = clone(tree)
 
-    num_mutations = np.random.poisson(mutation_rate, 1)[0]
+    # Pick the number of genes to mutate based
+    # on a poisson distribution
+    num_genes_to_mutate = np.random.poisson(mutation_rate, 1)[0]
 
-    for gene in range(num_mutations):
+    num_genes_mutated = 0
 
-        if isinstance(tree, LeafNode):
-            return tree
+    while num_genes_mutated < num_genes_to_mutate:
+        # How do we mutate?
+        # - pick a node at random to mutate
+        # - Pick a feature to mutate it to
+        # - Make a greedy laf split
+        to_mutate = random_branch_node(tree)
+        new_feature = random.choice(df.columns)
 
+        # Pick either a greedy split
+        # or a random split
         if random.choice([True, False]):
-            to_mutate = random_branch_node(tree)
-            to_mutate.split = features[to_mutate.var_name].sample(n=1).iloc[0]
+            split_val, _ = _single_variable_best_split(df, new_feature, target, loss_fn, leaf_prediction_builder)
         else:
-            to_mutate = random_branch_node(tree)
-            to_mutate.var_name = random.choice(features.columns)
+            split_val = df[new_feature].sample(n=1).iloc[0]
+
+        # Do the mutation
+        # We do in-place because this is a child
+        to_mutate.var_name = new_feature
+        to_mutate.split = split_val
+
+        # Do we mutate WHICH VARAIBLE
+        # if random.choice([True, False]):
+        #
+        #    to_mutate.split = features[to_mutate.var_name].sample(n=1).iloc[0]
+        # else:
+        #    to_mutate = random_branch_node(tree)
+        #    to_mutate.var_name =
+
+        num_genes_mutated += 1
 
     return tree
 
@@ -555,15 +611,11 @@ def evolve(df, target,
            num_children=50,
            num_split_candidates=50,
            num_seed_trees=5):
-
     df_train = df.sample(frac=0.7, replace=False, axis=0)
     target_train = target.loc[df_train.index]
 
     df_test = df[~df.index.isin(df_train.index)]
     target_test = target.loc[df_test.index]
-
-    # df_test = df[~df.index.isin(df_train.index)]
-    # target_test = target.loc[df_test.index]
 
     # Create and cache the possible splits
     var_split_candidate_map = {var: _get_split_candidates(df[var], threshold=num_split_candidates) for var in
@@ -571,43 +623,26 @@ def evolve(df, target,
 
     generation_info = []
 
-    current_generation = []
-
-    # num_seed = num_survivors  # // 2
-    # num_seed_betas = num_survivors - num_seed_alphas
+    generation = []
 
     # Create the alpha of this generation
     # Alphas are trees that are greedily trained with a sample
     # of the rows in the dataset
     for i in range(num_seed_trees):
-        evolution_logger.debug("Growing Alpha: {} of {}".format(i + 1, num_seed_trees))
-        df_alpha = sample(df_train, row_frac=0.5)
-        target_alpha = target_train.loc[df_alpha.index]
+        evolution_logger.debug("Growing Seed: {} of {}".format(i + 1, num_seed_trees))
+        df_seed = sample(df_train, row_frac=0.5)
+        target_seed = target_train.loc[df_seed.index]
         tree, _ = train_greedy_tree(
-            df=df_alpha, target=target_alpha,
+            df=df_seed, target=target_seed,
             loss_fn=loss_fn,
             max_depth=max_depth,
             min_to_split=min_to_split,
             leaf_prediction_builder=leaf_prediction_builder,
             var_split_candidate_map=var_split_candidate_map)
-        current_generation.append({'tree': tree,
-                                   'gen': 0,
-                                   'loss_training': [],
-                                   'loss_testing': []})  # (0, tree))
-
-    # Create the betas
-    # for i in range(num_seed_betas):
-    #    evolution_logger.debug("Growing Beta: {} of {}".format(i + 1, num_seed_betas))
-    #    tree, _ = train_greedy_tree(
-    #        df=df_train, target=target_train,
-    #        loss_fn=loss_fn,
-    #        max_depth=max_depth,
-    #        min_to_split=min_to_split,
-    #        leaf_prediction_builder=leaf_prediction_builder,
-    #        feature_sample_rate=0.5,
-    #        row_sample_rate=0.5,
-    #        var_split_candidate_map=var_split_candidate_map)
-    #    older_generation.append((0, tree))
+        generation.append({'tree': tree,
+                           'gen': 0,
+                           'loss_training': None,
+                           'loss_testing': None})
 
     for gen_idx in range(num_generations):
 
@@ -622,22 +657,25 @@ def evolve(df, target,
         children = []
         for _ in range(num_children):
 
-            # (mother_gen, mother), (father_gen, father) = random.sample(older_generation, 2)
-            mother, father = random.sample(current_generation, 2)
+            # Pick parents inversely proportionally to their loss
+            probs = softmax(np.array([1.0/t['loss_testing'] if t['loss_testing'] else 1.0 for t in generation]))
+            mother, father = np.random.choice(generation, 2, p=probs)
 
             child = mate(mother['tree'], father['tree'])
-            child = mutate(child, df_gen)
+            child = mutate(child, df_gen, target_gen, loss_fn, leaf_prediction_builder)
             child = prune(child, max_depth=max_depth)
             if child not in children:
                 children.append({'gen': max(mother['gen'], father['gen']) + 1,
                                  'tree': child})
 
-        generation = list(current_generation) + children
+        generation = list(generation) + children
+
+        generation = ensure_diversity(generation)
 
         # Calculate the leaf weights for this generation
         # and evaluate on the hold-out set
         losses = calculate_losses(generation, leaf_prediction_builder, loss_fn,
-                                  df_gen,  target_gen,
+                                  df_gen, target_gen,
                                   df_test, target_test)
 
         for tree, losses in zip(generation, losses):
@@ -645,11 +683,9 @@ def evolve(df, target,
             tree['loss_testing'] = losses['loss_testing']
 
         # Sort the trees to find the best tree
-        generation = sorted(generation, key=lambda x: x['loss_testing'])
+        next_generation = sorted(generation, key=lambda x: x['loss_testing'])[:num_survivors]
 
-        best_result = generation[0]
-
-        next_generation = generation[:num_survivors]
+        best_result = next_generation[0]
 
         evolution_logger.debug(
             "Surviving Generation: {}".format(", ".join(['{}:{:.4f}'.format(r['gen'], r['loss_testing'])
@@ -662,11 +698,10 @@ def evolve(df, target,
                 best_result['loss_testing'])
         )
 
-        generation_info.append({'best_of_generation': best_result})
-        #                    'generation': survivors})
+        generation = next_generation
 
-        #older_generation = [(s['type'], s['tree']) for s in survivors]
-        current_generation = next_generation
+        generation_info.append({'best_of_generation': best_result,
+                                'generation': generation})
 
     return best_result, generation_info
 
@@ -677,7 +712,6 @@ def calculate_losses(trees, leaf_prediction_builder, loss_fn,
     results = []
 
     for info in trees:
-
         # Calculate the leaf map on the training data
         leaf_map = calculate_leaf_map(info['tree'], df_train, target_train, leaf_prediction_builder)
 
@@ -688,15 +722,27 @@ def calculate_losses(trees, leaf_prediction_builder, loss_fn,
             'loss_training': loss_training,
             'loss_testing': loss_testing})
 
-
-        # 'tree': info['tree'],
-        #            'gen': info['gen'],
-        #            'loss_training': [] + info['losses_training'] + [loss_training],
-        #            'loss_testing': [] + info['losses_testing'] + [loss_testing]})
-
-    return results  # sorted(results, key=lambda x: x['loss_testing'])
+    return results
 
 
+def ensure_diversity(trees):
+    res = []
+    for tree in trees:
+
+        # If a tree matches structurally an existing tree,
+        # we skip it
+
+        is_diverse = True
+
+        for r in res:
+            if tree['tree'].structure_matches(r['tree']):
+                is_diverse = False
+                break
+
+        if is_diverse:
+            res.append(tree)
+
+    return res
 
 
 def sample(df, row_frac=None, col_frac=None):
