@@ -655,18 +655,22 @@ def evolve(df, target,
         evolution_logger.debug("Mating to create {} children".format(num_children))
 
         children = []
+
+        # Pick parents inversely proportionally to their loss
+        # This is probably overly complicated...
+        losses = np.array([t['loss_testing'] if t['loss_testing'] else 1.0 for t in generation])
+        probs = softmax(1.0 - losses / np.mean(losses))
+        print "Losses: {}".format(losses)
+        print "Probs: {}".format(probs)
         for _ in range(num_children):
 
-            # Pick parents inversely proportionally to their loss
-            probs = softmax(np.array([1.0/t['loss_testing'] if t['loss_testing'] else 1.0 for t in generation]))
             mother, father = np.random.choice(generation, 2, p=probs)
 
             child = mate(mother['tree'], father['tree'])
             child = mutate(child, df_gen, target_gen, loss_fn, leaf_prediction_builder)
             child = prune(child, max_depth=max_depth)
-            if child not in children:
-                children.append({'gen': max(mother['gen'], father['gen']) + 1,
-                                 'tree': child})
+            children.append({'gen': max(mother['gen'], father['gen']) + 1,
+                             'tree': child})
 
         generation = list(generation) + children
 
