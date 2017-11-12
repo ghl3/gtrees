@@ -8,3 +8,9 @@ venv
 *.profile
 *.so
 *.c
+
+
+.cache/
+build/
+*.pdf
+scikit-learn
