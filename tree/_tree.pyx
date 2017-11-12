@@ -218,7 +218,8 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 n_constant_features = stack_record.n_constant_features
 
                 n_node_samples = end - start
-                splitter.node_reset(start, end, &weighted_n_node_samples)
+                with gil:
+                    splitter.node_reset(start, end, &weighted_n_node_samples)
 
                 is_leaf = (depth >= max_depth or
                            n_node_samples < min_samples_split or
@@ -444,7 +445,8 @@ cdef class BestFirstTreeBuilder(TreeBuilder):
         cdef SIZE_t n_left, n_right
         cdef double imp_diff
 
-        splitter.node_reset(start, end, &weighted_n_node_samples)
+        with gil:
+            splitter.node_reset(start, end, &weighted_n_node_samples)
 
         if is_first:
             impurity = splitter.node_impurity()

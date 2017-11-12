@@ -51,9 +51,9 @@ cdef class Criterion:
     def __setstate__(self, d):
         pass
 
-    cdef int init(self, DOUBLE_t* y, SIZE_t y_stride, DOUBLE_t* sample_weight,
+    cdef int init(self, object X, DOUBLE_t* y, SIZE_t y_stride, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
-                  SIZE_t end) nogil except -1:
+                  SIZE_t end) except -1:
         """Placeholder for a method which will initialize the criterion.
 
         Returns -1 in case of failure to allocate memory (and raise MemoryError)
@@ -227,6 +227,7 @@ cdef class ClassificationCriterion(Criterion):
             The number of unique classes in each target
         """
 
+        self.X = NULL
         self.y = NULL
         self.y_stride = 0
         self.sample_weight = NULL
@@ -284,9 +285,9 @@ cdef class ClassificationCriterion(Criterion):
                  sizet_ptr_to_ndarray(self.n_classes, self.n_outputs)),
                 self.__getstate__())
 
-    cdef int init(self, DOUBLE_t* y, SIZE_t y_stride,
+    cdef int init(self, object X, DOUBLE_t* y, SIZE_t y_stride,
                   DOUBLE_t* sample_weight, double weighted_n_samples,
-                  SIZE_t* samples, SIZE_t start, SIZE_t end) nogil except -1:
+                  SIZE_t* samples, SIZE_t start, SIZE_t end) except -1:
         """Initialize the criterion at node samples[start:end] and
         children samples[start:start] and samples[start:end].
 
@@ -312,6 +313,11 @@ cdef class ClassificationCriterion(Criterion):
             The last sample to use in the mask
         """
 
+        cdef np.ndarray X_ndarray = X
+
+        self.X = <DTYPE_t*> X_ndarray.data
+
+        #self.X = X
         self.y = y
         self.y_stride = y_stride
         self.sample_weight = sample_weight
@@ -692,6 +698,7 @@ cdef class Gini(ClassificationCriterion):
         impurity_right[0] = gini_right / self.n_outputs
 
 
+
 cdef class RegressionCriterion(Criterion):
     """Abstract regression criterion.
 
@@ -719,6 +726,7 @@ cdef class RegressionCriterion(Criterion):
         """
 
         # Default values
+        self.X = NULL
         self.y = NULL
         self.y_stride = 0
         self.sample_weight = NULL
@@ -756,12 +764,16 @@ cdef class RegressionCriterion(Criterion):
     def __reduce__(self):
         return (type(self), (self.n_outputs, self.n_samples), self.__getstate__())
 
-    cdef int init(self, DOUBLE_t* y, SIZE_t y_stride, DOUBLE_t* sample_weight,
+    cdef int init(self, object X, DOUBLE_t* y, SIZE_t y_stride, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
-                  SIZE_t end) nogil except -1:
+                  SIZE_t end) except -1:
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end]."""
         # Initialize fields
+
+        cdef np.ndarray X_ndarray = X
+        self.X = <DTYPE_t*> X_ndarray.data
+        #self.X = X
         self.y = y
         self.y_stride = y_stride
         self.sample_weight = sample_weight
@@ -1049,9 +1061,9 @@ cdef class MAE(RegressionCriterion):
             self.left_child[k] = WeightedMedianCalculator(n_samples)
             self.right_child[k] = WeightedMedianCalculator(n_samples)
 
-    cdef int init(self, DOUBLE_t* y, SIZE_t y_stride, DOUBLE_t* sample_weight,
+    cdef int init(self, object X, DOUBLE_t* y, SIZE_t y_stride, DOUBLE_t* sample_weight,
                   double weighted_n_samples, SIZE_t* samples, SIZE_t start,
-                  SIZE_t end) nogil except -1:
+                  SIZE_t end) except -1:
         """Initialize the criterion at node samples[start:end] and
            children samples[start:start] and samples[start:end]."""
 
@@ -1060,6 +1072,10 @@ cdef class MAE(RegressionCriterion):
         cdef DOUBLE_t w = 1.0
 
         # Initialize fields
+
+        cdef np.ndarray X_ndarray = X
+        self.X = <DTYPE_t*> X_ndarray.data
+
         self.y = y
         self.y_stride = y_stride
         self.sample_weight = sample_weight
