@@ -9,6 +9,8 @@ import pandas as pd
 
 from abc import ABCMeta, abstractmethod
 
+from sklearn.linear_model import LogisticRegression
+
 tree_logger = logging.getLogger('tree')
 evolution_logger = logging.getLogger('evolution')
 
@@ -111,11 +113,69 @@ class LeafNode(Node):
         return isinstance(other, LeafNode)
 
 
+#
+# Loss Functions
+#
+
+
+def error_rate_loss(predicted, truth, threshold=0.5):
+    if len(truth) == 0:
+        return 0.0
+    else:
+        return 1.0 - np.mean((predicted >= threshold) == truth)
+
+
+def cross_entropy_loss(predicted, truth):
+    if len(truth) == 0:
+        return 0.0
+    else:
+        predicted = predicted.clip(lower=0.000001, upper=.999999)  # np.clip(predicted, 0.000001, .999999) #
+        return (-1.0 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)).mean()
+
+
+#
+# Leaf Predictors
+#
+
+def leaf_good_rate_prediction_builder(features, target):
+    """
+    Assume the target consists of 0, 1
+    """
+    if len(target) > 0:
+        mean = sum(target) / len(target)
+    else:
+        mean = 0
+
+    return lambda df: pd.Series([mean for _ in range(len(df))], index=df.index)
+
+
+def leaf_logit_prediction_builder(features, target):
+    """
+    Assume the target consists of 0, 1
+    """
+    if len(target) == 0:
+        return lambda df: 0
+    else:
+        logit = LogisticRegression()
+        logit.fit(features, target)
+        return lambda df: pd.Series(logit.predict_proba(features)[:1], index=df.index)
+
+    #    if len(target) > 0:
+    #        mean = sum(target) / len(target)
+    ##    else:
+    #       mean = 0
+
+
+#
+# Implementation
+#
+
+
 def _get_split_candidates(srs, threshold=100):
     if len(srs) < threshold:
         return list(srs.values)
     else:
-        return list(pd.qcut(srs, threshold, labels=False, retbins=True))[1]
+        return list(pd.qcut(srs, threshold, labels=False, retbins=True, duplicates='drop'))[1]
 
 
 def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
@@ -156,7 +216,10 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
         right_predicted = right_leaf_predict_fn(df_right)
 
         left_loss = loss_fn(left_predicted, target_left)
+        assert pd.notnull(left_loss), "Loss yielded null value"
         right_loss = loss_fn(right_predicted, target_right)
+        assert pd.notnull(right_loss), "Loss yielded null value"
+
         avg_loss = (left_loss * len(left_idx) + right_loss * len(right_idx)) / (len(df))
 
         if best_loss is None or avg_loss < best_loss:
@@ -190,18 +253,6 @@ def get_best_split(df, target, loss_fn, leaf_prediction_builder, var_split_candi
     return best_var, best_split, best_loss
 
 
-def leaf_good_rate_split_builder(features, target):
-    """
-    Assume the target consists of 0, 1
-    """
-    if len(target) > 0:
-        mean = sum(target) / len(target)
-    else:
-        mean = 0
-
-    return lambda df: pd.Series([mean for _ in range(len(df))], index=df.index)
-
-
 def softmax(x):
     """Compute softmax values for each sets of scores in x."""
     e_x = np.exp(x - np.max(x))
@@ -212,7 +263,7 @@ def train_greedy_tree(df, target, loss_fn,
                       max_depth=None,
                       min_to_split=None,
                       leaf_map=None,
-                      leaf_prediction_builder=leaf_good_rate_split_builder,
+                      leaf_prediction_builder=leaf_good_rate_prediction_builder,
                       var_split_candidate_map=None,
                       feature_sample_rate=None,
                       row_sample_rate=None,
@@ -283,7 +334,7 @@ def train_greedy_tree(df, target, loss_fn,
     return BranchNode(var, split, left_tree, right_tree), leaf_map
 
 
-def calculate_leaf_map(tree, df, target, leaf_prediction_builder=leaf_good_rate_split_builder):
+def calculate_leaf_map(tree, df, target, leaf_prediction_builder=leaf_good_rate_prediction_builder):
     """
     Takes a built tree structure and a features/target pair
     and returns a map of each leaf to the function evaluating
@@ -457,7 +508,7 @@ def mutate(tree, df, target, loss_fn, leaf_prediction_builder, mutation_rate=1.0
 
         # Pick either a greedy split
         # or a random split
-        if random.choice([True, False]):
+        if random.choice([True, False], ):
             split_val, _ = _single_variable_best_split(df, new_feature, target, loss_fn, leaf_prediction_builder)
         else:
             split_val = df[new_feature].sample(n=1).iloc[0]
@@ -513,25 +564,11 @@ def cut(x, min, max):
         return x
 
 
-def error_rate_loss(predicted, truth, threshold=0.5):
-    if len(truth) == 0:
-        return 0.0
-    else:
-        return 1.0 - np.mean((predicted >= threshold) == truth)
-
-
-def cross_entropy_loss(predicted, truth):
-    if len(truth) == 0:
-        return 0.0
-    else:
-        return (-1.0 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)).mean()
-
-
 def train_random_trees(df, target,
                        loss_fn,
                        max_depth=None,
                        min_to_split=None,
-                       leaf_prediction_builder=leaf_good_rate_split_builder,
+                       leaf_prediction_builder=leaf_good_rate_prediction_builder,
                        num_trees=10,
                        num_split_candidates=50):
     df_train = df.sample(frac=0.7, replace=False, axis=0)
@@ -605,7 +642,7 @@ def evolve(df, target,
            loss_fn,
            max_depth=None,
            min_to_split=None,
-           leaf_prediction_builder=leaf_good_rate_split_builder,
+           leaf_prediction_builder=leaf_good_rate_prediction_builder,
            num_generations=10,
            num_survivors=10,
            num_children=50,
@@ -613,6 +650,8 @@ def evolve(df, target,
            num_seed_trees=5):
     df_train = df.sample(frac=0.7, replace=False, axis=0)
     target_train = target.loc[df_train.index]
+
+    assert 0 == pd.isnull(target_train).sum(), "Targets may not have NULL values"
 
     df_test = df[~df.index.isin(df_train.index)]
     target_test = target.loc[df_test.index]
@@ -660,10 +699,7 @@ def evolve(df, target,
         # This is probably overly complicated...
         losses = np.array([t['loss_testing'] if t['loss_testing'] else 1.0 for t in generation])
         probs = softmax(1.0 - losses / np.mean(losses))
-        print "Losses: {}".format(losses)
-        print "Probs: {}".format(probs)
         for _ in range(num_children):
-
             mother, father = np.random.choice(generation, 2, p=probs)
 
             child = mate(mother['tree'], father['tree'])

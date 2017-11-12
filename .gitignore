@@ -6,3 +6,5 @@ venv
 *.txt
 *.calltree
 *.profile
+*.so
+*.c
