@@ -27,6 +27,8 @@ class Node(object):
         raise NotImplemented()
 
     def predict(self, df, leaf_score_map):
+        # A pd Series of leaf-hash values
+        # for each row
         leaf_for_row = self.find_leaves(df)
 
         results = []
@@ -34,10 +36,46 @@ class Node(object):
         for leaf_hash, df_leaf in df.groupby(leaf_for_row):
             predict_fn = leaf_score_map.get(leaf_hash,
                                             lambda df: pd.Series([0.5 for _ in range(len(df))], index=df.index))
-            predictions = predict_fn(df_leaf)
+            predictions = pd.Series(predict_fn(df_leaf), index=df_leaf.index)
             results.append(predictions)
 
         return pd.concat(results).loc[df.index]
+
+#    def predict2(self, arr, leaf_score_map):
+
+        # Get a numpy array of leaf hash codes
+#        leaf_for_row = self.find_leaves(arr)
+
+        # Create an array of blank predictions
+#        predictions = np.zeros((len(arr), 1))  # np.full((len(arr), 1), -1)
+
+        # Fill the array with the predictions
+#        for hash in set(leaf_for_row):
+#            predict_fn = leaf_score_map[hash]
+#            predictions = predictions + np.where(leaf_for_row == hash, predict_fn(arr), 0.0)
+
+#        #return predictions
+
+#    def predict3(self, arr, leaf_score_map):
+
+#        arr = arr.values
+
+        # Get a numpy array of leaf hash codes
+#        leaf_for_row = self.find_leaves(arr).values
+
+        # Create an array of blank predictions
+#        predictions = np.zeros((len(arr), 1))  # np.full((len(arr), 1), -1)
+
+        #print leaf_for_row
+
+        # Fill the array with the predictions
+#        for hash in set(leaf_for_row):
+#            print hash
+#            predict_fn = leaf_score_map[hash]
+#            pred_arg = arr[leaf_for_row.reshape(len(arr)) == hash, :]
+#            predictions[leaf_for_row.reshape(len(arr)) == hash] = predict_fn(pred_arg) #np.where(leaf_for_row == hash, predict_fn(arr), 0.0)
+
+#        return predictions
 
     @abstractmethod
     def structure_matches(self, other):
@@ -52,9 +90,11 @@ class BranchNode(Node):
         self.right = right
 
     def find_leaves(self, df):
-        idx_left = (df[self.var_name] <= self.split)
+        idx_left = (df[self.var_name] < self.split)
+        idx_right = (df[self.var_name] >= self.split)
+
         left_leaves = self.left.find_leaves(df.loc[idx_left])
-        right_leaves = self.right.find_leaves(df.loc[~idx_left])
+        right_leaves = self.right.find_leaves(df.loc[idx_right])
         return pd.concat([left_leaves, right_leaves]).loc[df.index]
 
     def prn(self, indent=None):
@@ -129,7 +169,7 @@ def cross_entropy_loss(predicted, truth):
     if len(truth) == 0:
         return 0.0
     else:
-        predicted = predicted.clip(lower=0.000001, upper=.999999)  # np.clip(predicted, 0.000001, .999999) #
+        predicted = np.clip(predicted, 0.000001, .999999)  # predicted.clip(lower=0.000001, upper=.999999)  #  #
         return (-1.0 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)).mean()
 
 
@@ -137,16 +177,16 @@ def cross_entropy_loss(predicted, truth):
 # Leaf Predictors
 #
 
-def leaf_good_rate_prediction_builder(features, target):
+def leaf_good_rate_prediction_builder(_, target):
     """
     Assume the target consists of 0, 1
     """
     if len(target) > 0:
-        mean = sum(target) / len(target)
+        mean = target.sum() / len(target)  # sum(target) / len(target)
     else:
         mean = 0
 
-    return lambda df: pd.Series([mean for _ in range(len(df))], index=df.index)
+    return lambda fs: np.array([mean for _ in range(len(fs))])
 
 
 def leaf_logit_prediction_builder(features, target):
@@ -158,12 +198,12 @@ def leaf_logit_prediction_builder(features, target):
     else:
         logit = LogisticRegression()
         logit.fit(features, target)
-        return lambda df: pd.Series(logit.predict_proba(features)[:1], index=df.index)
+        return lambda fs: logit.predict_proba(fs)[:1]
 
-    #    if len(target) > 0:
-    #        mean = sum(target) / len(target)
-    ##    else:
-    #       mean = 0
+        #    if len(target) > 0:
+        #        mean = sum(target) / len(target)
+        ##    else:
+        #       mean = 0
 
 
 #
@@ -173,12 +213,174 @@ def leaf_logit_prediction_builder(features, target):
 
 def _get_split_candidates(srs, threshold=100):
     if len(srs) < threshold:
-        return list(srs.values)
+        return list(srs)
     else:
-        return list(pd.qcut(srs, threshold, labels=False, retbins=True, duplicates='drop'))[1]
+
+        skip = len(srs) // 100
+
+        return list(srs[::skip])
+
+        # return list(pd.qcut(srs, threshold, labels=False, retbins=True, duplicates='drop')[1])
 
 
-def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
+def sort_by_col(fs, t, idx):
+    order = np.argsort(fs[:, idx])
+    return (fs[order], t[order])
+
+
+def _np_single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
+    X = df.values.copy()
+    Y = target.values.copy()
+    var_idx = list(df.columns).index(var)
+
+    # First, we sort the features by the ith idx
+    # order = np.argsort(df[:, var_idx])
+    # features = X[order]
+    # target = Y[order]
+    features, target = sort_by_col(X, Y, var_idx)
+    # IDX = df.index[order]
+    srs = X[:, var_idx]
+    if candidates is None:
+        candidates = _get_split_candidates(srs)
+
+        # candidates = set(srs)
+
+    best_loss = None
+    best_split = None
+
+    split_value = None
+
+    for idx in range(len(srs)):
+
+        # We consider splits only at the first value
+        # in a series
+        #  0  1  2  3  4  5  6  7  8
+        #  1  1  1  2  2  2  3  3  3
+        #           ^ --- SPLIT
+        #    [0:3]    [3:-1]
+        #
+        #
+        if srs[idx] == split_value:
+            continue
+        else:
+            split_value = srs[idx]
+
+        if split_value not in candidates:
+            continue
+
+        # left_condition = (srs < val)
+        np_feat_left = features[0:idx, :]
+        np_target_left = target[0:idx]
+
+        left_leaf_predict_fn = leaf_prediction_builder(np_feat_left, np_target_left)
+        left_predicted = left_leaf_predict_fn(np_feat_left)
+        left_loss = loss_fn(left_predicted, np_target_left)
+
+        # right_condition = (srs >= val)
+        np_feat_right = features[idx:len(X), :]
+        np_target_right = target[idx:len(X)]
+
+        right_leaf_predict_fn = leaf_prediction_builder(np_feat_right, np_target_right)
+        right_predicted = right_leaf_predict_fn(np_feat_right)
+        right_loss = loss_fn(right_predicted, np_target_right)
+
+        avg_loss = (left_loss * len(np_feat_left) + right_loss * (len(np_feat_right))) / (len(features))
+
+        # print "Idx: {} Split Val: {:.3f} Left Loss: {:.3f} Right Loss: {:.3f} Avg Loss: {:.3f} Is Best?: {}".format(
+        #    idx, split_value, left_loss, right_loss, avg_loss, avg_loss < best_loss
+        # )
+
+        if best_loss is None or avg_loss < best_loss:
+            best_split = split_value
+            best_loss = avg_loss
+
+    if best_loss is None:
+        raise Exception()
+
+    return best_split, best_loss
+
+
+def _hybrid_single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
+    X = df.values.copy()
+    Y = target.values.copy()
+    var_idx = list(df.columns).index(var)
+
+    # First, we sort the features by the ith idx
+    # order = np.argsort(df[:, var_idx])
+    # features = X[order]
+    # target = Y[order]
+    features, target = sort_by_col(X, Y, var_idx)
+    # IDX = df.index[order]
+    srs = X[:, var_idx]
+    if candidates is None:
+        candidates = _get_split_candidates(srs)
+
+        # candidates = set(srs)
+
+    best_loss = None
+    best_split = None
+
+    split_value = None
+
+    for idx in range(len(srs)):
+
+        # We consider splits only at the first value
+        # in a series
+        #  0  1  2  3  4  5  6  7  8
+        #  1  1  1  2  2  2  3  3  3
+        #           ^ --- SPLIT
+        #    [0:3]    [3:-1]
+        #
+        #
+        if srs[idx] == split_value:
+            continue
+        else:
+            split_value = srs[idx]
+
+        if split_value not in candidates:
+            continue
+
+        # left_condition = (srs < val)
+        np_feat_left = features[0:idx, :]
+        np_target_left = target[0:idx]
+        idx_left = df.index[0:idx]
+
+        df_feat_left = pd.DataFrame(np_feat_left, index=idx_left)
+        df_targ_left = pd.Series(np_target_left, index=idx_left)
+
+        left_leaf_predict_fn = leaf_prediction_builder(df_feat_left, df_targ_left)
+        left_predicted = left_leaf_predict_fn(df_feat_left)
+        left_loss = loss_fn(left_predicted, df_targ_left)
+
+        # right_condition = (srs >= val)
+        np_feat_right = features[idx:len(X), :]
+        np_target_right = target[idx:len(X)]
+        idx_right = df.index[idx:len(X)]
+
+        df_feat_right = pd.DataFrame(np_feat_right, index=idx_right)
+        df_targ_right = pd.Series(np_target_right, index=idx_right)
+
+        right_leaf_predict_fn = leaf_prediction_builder(df_feat_right, df_targ_right)
+        right_predicted = right_leaf_predict_fn(df_feat_right)
+        right_loss = loss_fn(right_predicted, df_targ_right)
+
+        avg_loss = (left_loss * len(np_feat_left) + right_loss * (len(np_feat_right))) / (len(features))
+
+        # print "Idx: {} Split Val: {:.3f} Left Loss: {:.3f} Right Loss: {:.3f} Avg Loss: {:.3f} Is Best?: {}".format(
+        #    idx, split_value, left_loss, right_loss, avg_loss, avg_loss < best_loss
+        # )
+
+        if best_loss is None or avg_loss < best_loss:
+            best_split = split_value
+            best_loss = avg_loss
+
+    if best_loss is None:
+        raise Exception()
+
+    return best_split, best_loss
+
+
+def _df_single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
     # Convention:
     # Left is BAD
     # Right is GOOD
@@ -189,6 +391,10 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
     # or even: df._reindex_axes(axes={'index':df.index, 'columns': df.columns},
     # copy=False, level=None, limit=None, tolerance=None, method=None, fill_value=None)
     # From generic.py: 2594
+
+
+    df = df.sort_values(by=var)
+    target = target.loc[df.index]
 
     srs = df[var]
 
@@ -201,17 +407,22 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
     best_loss = None
     best_split = None
 
-    for val in candidates:
+    for idx in range(len(df)):
 
-        left_idx = df.index[(srs <= val)]
-        df_left = df.reindex_axis(left_idx, copy=False)  # df.loc[left_idx]
-        target_left = target.loc[left_idx]
+        val = df.iloc[idx][var]
+
+        if val not in candidates:
+            continue
+
+        # left_idx = df.iloc[0, idx] #index[(srs <= val)]
+        df_left = df.iloc[0:idx]  # df.reindex_axis(left_idx, copy=False)  # df.loc[left_idx]
+        target_left = target.iloc[0:idx]
         left_leaf_predict_fn = leaf_prediction_builder(df_left, target_left)
         left_predicted = left_leaf_predict_fn(df_left)
 
-        right_idx = df.index[(srs > val)]
-        df_right = df.reindex_axis(right_idx, copy=False)  # df.loc[right_idx]
-        target_right = target.loc[right_idx]
+        # right_idx = df.index[(srs > val)]
+        df_right = df.iloc[idx:len(df)]  # reindex_axis(right_idx, copy=False)  # df.loc[right_idx]
+        target_right = target.iloc[idx:len(df)]  # .loc[right_idx]
         right_leaf_predict_fn = leaf_prediction_builder(df_right, target_right)
         right_predicted = right_leaf_predict_fn(df_right)
 
@@ -220,7 +431,7 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
         right_loss = loss_fn(right_predicted, target_right)
         assert pd.notnull(right_loss), "Loss yielded null value"
 
-        avg_loss = (left_loss * len(left_idx) + right_loss * len(right_idx)) / (len(df))
+        avg_loss = (left_loss * len(df_left) + right_loss * len(df_right)) / (len(df))
 
         if best_loss is None or avg_loss < best_loss:
             best_split = val
@@ -229,7 +440,37 @@ def _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builde
     return best_split, best_loss
 
 
-def get_best_split(df, target, loss_fn, leaf_prediction_builder, var_split_candidate_map=None):
+def _cython_single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
+    import tree._my_tree
+
+    lmb = tree._my_tree.MeanLeafMapperBuilder()
+    ce = tree._my_tree.CrossEntropyLoss()
+    spliter = tree._my_tree.SpitFinder()
+
+    np_features = df.astype(np.float32).values  # pd.DataFrame(df, dtypes='float32').values
+    np_targets = target.astype(np.float32).values  # pd.Series(target, dtype='float32').values
+
+    var_idx = list(df.columns).index(var)
+
+    if candidates is None:
+        candidates = set(_get_split_candidates(df[var].astype(np.float32)))
+    else:
+        candidates = set(candidates)
+
+    return spliter.getBestSplit(
+        var_idx,
+        candidates,
+        np_features,
+        np_targets,
+        lmb,
+        ce)
+
+
+# Which version to use?
+_single_variable_best_split = _cython_single_variable_best_split
+
+
+def get_best_split(df, target, loss_fn, leaf_prediction_builder):
     # Return:
     # (var, split, loss)
 
@@ -238,13 +479,7 @@ def get_best_split(df, target, loss_fn, leaf_prediction_builder, var_split_candi
     best_loss = None
 
     for var in df.columns:
-
-        if var_split_candidate_map is not None:
-            candidate = var_split_candidate_map.get(var, None)
-        else:
-            candidate = None
-
-        split, loss = _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidate)
+        split, loss = _single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder)
         if best_loss is None or loss < best_loss:
             best_var = var
             best_split = split
@@ -272,8 +507,8 @@ def train_greedy_tree(df, target, loss_fn,
     Returns a tree and its leaf map
     """
 
-    if var_split_candidate_map is None:
-        var_split_candidate_map = {var: _get_split_candidates(df[var]) for var in df.columns}
+    # if var_split_candidate_map is None:
+    #    var_split_candidate_map = {var: _get_split_candidates(df[var]) for var in df.columns}
 
     if leaf_map is None:
         leaf_map = {}
@@ -292,7 +527,7 @@ def train_greedy_tree(df, target, loss_fn,
     df_for_splitting = sample(df, row_frac=row_sample_rate, col_frac=feature_sample_rate)
 
     var, split, loss = get_best_split(df_for_splitting, target.loc[df_for_splitting.index],
-                                      loss_fn, leaf_prediction_builder, var_split_candidate_map)
+                                      loss_fn, leaf_prediction_builder)
 
     tree_logger.info("Training.  Depth {} Current Loss: {:.4f} Best Split: {} {:.4f} {:.4f}".format(
         current_depth,
@@ -307,10 +542,18 @@ def train_greedy_tree(df, target, loss_fn,
         leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
         return leaf, leaf_map
 
-    left_idx = df[var] <= split
-    right_idx = df[var] > split
+    left_criteria = df[var] < split
+    right_criteria = df[var] >= split
 
-    left_tree, left_map = train_greedy_tree(df.loc[left_idx], target.loc[left_idx],
+    # Handle the (odd) case where the split
+    # moves all noes to one way or another
+    if left_criteria.sum() == 0 or right_criteria.sum() == 0:
+        tree_logger.info("No split improves loss.  Returning")
+        leaf = LeafNode()
+        leaf_map[hash(leaf)] = leaf_prediction_builder(df, target)
+        return leaf, leaf_map
+
+    left_tree, left_map = train_greedy_tree(df[left_criteria], target[left_criteria],
                                             loss_fn,
                                             max_depth=max_depth,
                                             min_to_split=min_to_split,
@@ -319,7 +562,7 @@ def train_greedy_tree(df, target, loss_fn,
                                             var_split_candidate_map=var_split_candidate_map,
                                             current_depth=current_depth + 1)
 
-    right_tree, right_map = train_greedy_tree(df.loc[right_idx], target.loc[right_idx],
+    right_tree, right_map = train_greedy_tree(df[right_criteria], target[right_criteria],
                                               loss_fn,
                                               max_depth=max_depth,
                                               min_to_split=min_to_split,

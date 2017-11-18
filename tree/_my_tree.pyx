@@ -123,7 +123,11 @@ cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
                    np.ndarray[DTYPE_t, ndim=2] X,
                    np.ndarray[DOUBLE_t, ndim=1, mode="c"] y):
 
-        return MeanLeafMapper(np.mean(y))
+        if len(y) > 0:
+
+            return MeanLeafMapper(np.mean(y))
+        else:
+            return MeanLeafMapper(0)
 
 
 
@@ -168,35 +172,26 @@ cdef class CrossEntropyLoss(LossFunction):
                        np.ndarray[DOUBLE_t, ndim=1, mode="c"] truth,
                        np.ndarray[DOUBLE_t, ndim=1, mode="c"] predicted):
 
-        #cdef SIZE_t* n_classes = self.n_classes
-        #cdef double* sum_total = self.sum_total
         cdef double entropy = 0.0
         cdef double count = 0.0
-        #cdef SIZE_t k
-        #cdef SIZE_t c
+
+        if len(truth) == 0:
+            return 0
 
         assert len(truth) == len(predicted)
 
-        #  return (-1.0 * truth * np.log(predicted) - (1.0 - truth) * np.log(1.0 - predicted)).mean()
+        pred = np.clip(predicted, 0.00001, .99999)
 
-        for i in range(len(truth)):
+        return (-1.0 * truth * np.log(pred) - (1.0 - truth) * np.log(1.0 - pred)).mean()
 
-            pred = np.clip(predicted[i], 0.000001, .999999)
+        #for i in range(len(truth)):
+        #    entropy += -1.0 * truth[i] * log(pred[i]) - (1.0 - truth[i]) * log(1.0 - pred[i])
+        #    count += 1.0
 
-            entropy += -1.0 * truth[i] * log(pred) - (1.0 - truth[i]) * log(1.0 - pred)
-            count += 1.0
-
-            #    count_k = sum_total[c]
-            #    if count_k > 0.0:
-            #        count_k /= self.weighted_n_node_samples
-            #        entropy -= count_k * log(count_k)
-
-            #sum_total += self.sum_stride
-
-        if count == 0:
-            return 1.0
-        else:
-            return entropy / count
+        #if count == 0:
+        #    return 1.0
+        #else:
+        #    return entropy / count
 
 
     cpdef DOUBLE_t combineLosses(self,
@@ -204,8 +199,9 @@ cdef class CrossEntropyLoss(LossFunction):
                                  DOUBLE_t lossRight, DOUBLE_t weightRight):
 
         if weightLeft + weightRight == 0:
-            return 1.0
+            return 0.0
         else:
+            print lossLeft, weightLeft, lossRight, weightRight
             return (lossLeft * weightLeft + lossRight * weightRight) / (weightLeft + weightRight)
 
 
@@ -220,6 +216,7 @@ cdef class SpitFinder:
 
     cpdef tuple getBestSplit(self,
                                 int varIdx,
+                                set splitCandidates,
                                 np.ndarray[DOUBLE_t, ndim=2] X,
                                 np.ndarray[DOUBLE_t, ndim=1, mode="c"] Y,
                                 LeafMapperBuilder leafMapperBuilder,
@@ -228,10 +225,6 @@ cdef class SpitFinder:
         # Sort X and y by the variable in question
         # Iterate along the variable
         # Calcualte the loss at each split
-
-        #cdef np.ndarray[DOUBLE_t, ndim=2] XX = X.copy()
-        #cdef np.ndarray[DOUBLE_t, ndim=1, mode="c"] XX = Y.copy()
-
 
         #def sort_by_col(fs, t, idx):
         cdef order = np.argsort(X[:, varIdx])
@@ -259,14 +252,17 @@ cdef class SpitFinder:
             else:
                 split_value = XX[splitIdx, varIdx]
 
+            if split_value not in splitCandidates:
+                continue
+
             X_left = XX[0:splitIdx, :]
             Y_left = YY[0:splitIdx]
             left_leaf_predict_fn = leafMapperBuilder.build(X_left, Y_left)
             PRED_left = left_leaf_predict_fn.predict(X_left)
             left_loss = lossFunction.loss(Y_left, PRED_left)
 
-            X_right = XX[splitIdx:-1, :]
-            Y_right = YY[splitIdx:-1]
+            X_right = XX[splitIdx:len(XX), :]
+            Y_right = YY[splitIdx:len(YY)]
             right_leaf_predict_fn = leafMapperBuilder.build(X_right, Y_right)
             PRED_right = right_leaf_predict_fn.predict(X_right)
             right_loss = lossFunction.loss(Y_right, PRED_right)
@@ -274,6 +270,8 @@ cdef class SpitFinder:
             avg_loss = lossFunction.combineLosses(left_loss, <double> len(X_left),
                                                   right_loss, <double> len(X_right))
 
+            #if splitIdx % 100 == 0:
+            #    print "Split Idx: ", splitIdx, "split val: ", split_value, "Loss", avg_loss
 
             if avg_loss < best_loss:
                 best_split = split_value

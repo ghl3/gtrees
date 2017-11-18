@@ -41,6 +41,7 @@ cdef class SpitFinder:
 
     cpdef tuple getBestSplit(self,
                                 int varIdx,
+                                set splitCandidates,
                                 np.ndarray[DOUBLE_t, ndim=2] X,
                                 np.ndarray[DOUBLE_t, ndim=1, mode="c"] Y,
                                 LeafMapperBuilder leafMapperBuilder,
