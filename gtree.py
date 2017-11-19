@@ -803,3 +803,225 @@ def sample(df, row_frac=None, col_frac=None):
         nrows = int(math.floor(len(df) * row_frac))
         rows = random.sample(df.index, nrows)
         return df.loc[rows, cols]
+
+
+
+
+
+
+#
+# OLD
+#
+
+
+
+def _np_single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
+    X = df.values.copy()
+    Y = target.values.copy()
+    var_idx = list(df.columns).index(var)
+
+    # First, we sort the features by the ith idx
+    # order = np.argsort(df[:, var_idx])
+    # features = X[order]
+    # target = Y[order]
+    features, target = sort_by_col(X, Y, var_idx)
+    # IDX = df.index[order]
+    srs = X[:, var_idx]
+    if candidates is None:
+        candidates = _get_split_candidates(srs)
+
+        # candidates = set(srs)
+
+    best_loss = None
+    best_split = None
+
+    split_value = None
+
+    for idx in range(len(srs)):
+
+        # We consider splits only at the first value
+        # in a series
+        #  0  1  2  3  4  5  6  7  8
+        #  1  1  1  2  2  2  3  3  3
+        #           ^ --- SPLIT
+        #    [0:3]    [3:-1]
+        #
+        #
+        if srs[idx] == split_value:
+            continue
+        else:
+            split_value = srs[idx]
+
+        if split_value not in candidates:
+            continue
+
+        # left_condition = (srs < val)
+        np_feat_left = features[0:idx, :]
+        np_target_left = target[0:idx]
+
+        left_leaf_predict_fn = leaf_prediction_builder(np_feat_left, np_target_left)
+        left_predicted = left_leaf_predict_fn(np_feat_left)
+        left_loss = loss_fn(left_predicted, np_target_left)
+
+        # right_condition = (srs >= val)
+        np_feat_right = features[idx:len(X), :]
+        np_target_right = target[idx:len(X)]
+
+        right_leaf_predict_fn = leaf_prediction_builder(np_feat_right, np_target_right)
+        right_predicted = right_leaf_predict_fn(np_feat_right)
+        right_loss = loss_fn(right_predicted, np_target_right)
+
+        avg_loss = (left_loss * len(np_feat_left) + right_loss * (len(np_feat_right))) / (len(features))
+
+        # print "Idx: {} Split Val: {:.3f} Left Loss: {:.3f} Right Loss: {:.3f} Avg Loss: {:.3f} Is Best?: {}".format(
+        #    idx, split_value, left_loss, right_loss, avg_loss, avg_loss < best_loss
+        # )
+
+        if best_loss is None or avg_loss < best_loss:
+            best_split = split_value
+            best_loss = avg_loss
+
+    if best_loss is None:
+        raise Exception()
+
+    return best_split, best_loss
+
+
+def _hybrid_single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
+    X = df.values.copy()
+    Y = target.values.copy()
+    var_idx = list(df.columns).index(var)
+
+    # First, we sort the features by the ith idx
+    # order = np.argsort(df[:, var_idx])
+    # features = X[order]
+    # target = Y[order]
+    features, target = sort_by_col(X, Y, var_idx)
+    # IDX = df.index[order]
+    srs = X[:, var_idx]
+    if candidates is None:
+        candidates = _get_split_candidates(srs)
+
+        # candidates = set(srs)
+
+    best_loss = None
+    best_split = None
+
+    split_value = None
+
+    for idx in range(len(srs)):
+
+        # We consider splits only at the first value
+        # in a series
+        #  0  1  2  3  4  5  6  7  8
+        #  1  1  1  2  2  2  3  3  3
+        #           ^ --- SPLIT
+        #    [0:3]    [3:-1]
+        #
+        #
+        if srs[idx] == split_value:
+            continue
+        else:
+            split_value = srs[idx]
+
+        if split_value not in candidates:
+            continue
+
+        # left_condition = (srs < val)
+        np_feat_left = features[0:idx, :]
+        np_target_left = target[0:idx]
+        idx_left = df.index[0:idx]
+
+        df_feat_left = pd.DataFrame(np_feat_left, index=idx_left)
+        df_targ_left = pd.Series(np_target_left, index=idx_left)
+
+        left_leaf_predict_fn = leaf_prediction_builder(df_feat_left, df_targ_left)
+        left_predicted = left_leaf_predict_fn(df_feat_left)
+        left_loss = loss_fn(left_predicted, df_targ_left)
+
+        # right_condition = (srs >= val)
+        np_feat_right = features[idx:len(X), :]
+        np_target_right = target[idx:len(X)]
+        idx_right = df.index[idx:len(X)]
+
+        df_feat_right = pd.DataFrame(np_feat_right, index=idx_right)
+        df_targ_right = pd.Series(np_target_right, index=idx_right)
+
+        right_leaf_predict_fn = leaf_prediction_builder(df_feat_right, df_targ_right)
+        right_predicted = right_leaf_predict_fn(df_feat_right)
+        right_loss = loss_fn(right_predicted, df_targ_right)
+
+        avg_loss = (left_loss * len(np_feat_left) + right_loss * (len(np_feat_right))) / (len(features))
+
+        # print "Idx: {} Split Val: {:.3f} Left Loss: {:.3f} Right Loss: {:.3f} Avg Loss: {:.3f} Is Best?: {}".format(
+        #    idx, split_value, left_loss, right_loss, avg_loss, avg_loss < best_loss
+        # )
+
+        if best_loss is None or avg_loss < best_loss:
+            best_split = split_value
+            best_loss = avg_loss
+
+    if best_loss is None:
+        raise Exception()
+
+    return best_split, best_loss
+
+
+def _df_single_variable_best_split(df, var, target, loss_fn, leaf_prediction_builder, candidates=None):
+    # Convention:
+    # Left is BAD
+    # Right is GOOD
+
+    # TODO: Optimize me!
+    # Try: df.reindex_axis(index, copy=False)
+    # or:  df.reindex(index=['a', 'b'], copy=False)
+    # or even: df._reindex_axes(axes={'index':df.index, 'columns': df.columns},
+    # copy=False, level=None, limit=None, tolerance=None, method=None, fill_value=None)
+    # From generic.py: 2594
+
+
+    df = df.sort_values(by=var)
+    target = target.loc[df.index]
+
+    srs = df[var]
+
+    if candidates is None:
+        candidates = _get_split_candidates(srs)
+
+    if len(srs) <= len(candidates):
+        candidates = srs.values
+
+    best_loss = None
+    best_split = None
+
+    for idx in range(len(df)):
+
+        val = df.iloc[idx][var]
+
+        if val not in candidates:
+            continue
+
+        # left_idx = df.iloc[0, idx] #index[(srs <= val)]
+        df_left = df.iloc[0:idx]  # df.reindex_axis(left_idx, copy=False)  # df.loc[left_idx]
+        target_left = target.iloc[0:idx]
+        left_leaf_predict_fn = leaf_prediction_builder(df_left, target_left)
+        left_predicted = left_leaf_predict_fn(df_left)
+
+        # right_idx = df.index[(srs > val)]
+        df_right = df.iloc[idx:len(df)]  # reindex_axis(right_idx, copy=False)  # df.loc[right_idx]
+        target_right = target.iloc[idx:len(df)]  # .loc[right_idx]
+        right_leaf_predict_fn = leaf_prediction_builder(df_right, target_right)
+        right_predicted = right_leaf_predict_fn(df_right)
+
+        left_loss = loss_fn(left_predicted, target_left)
+        assert pd.notnull(left_loss), "Loss yielded null value"
+        right_loss = loss_fn(right_predicted, target_right)
+        assert pd.notnull(right_loss), "Loss yielded null value"
+
+        avg_loss = (left_loss * len(df_left) + right_loss * len(df_right)) / (len(df))
+
+        if best_loss is None or avg_loss < best_loss:
+            best_split = val
+            best_loss = avg_loss
+
+    return best_split, best_loss
