@@ -24,7 +24,18 @@ cdef double INFINITY = np.inf
 cdef double NEG_INFINITY = np.NINF
 
 
-#ctypedef np.npy_float64 DOUBLE_t         # Type of y, sample_weight
+cpdef foo(DOUBLE_t a):
+    return a*a
+
+
+cpdef DOUBLE_t combineLosses(
+    DOUBLE_t lossLeft, DOUBLE_t weightLeft,
+    DOUBLE_t lossRight, DOUBLE_t weightRight):
+
+        if weightLeft + weightRight == 0:
+            return 0.0
+        else:
+            return (lossLeft * weightLeft + lossRight * weightRight) / (weightLeft + weightRight)
 
 
 cdef class LeafMapper:
@@ -32,42 +43,12 @@ cdef class LeafMapper:
     def __cinit__(self):
         pass
 
-
     def __dealloc__(self):
         """Destructor."""
         pass
 
-#cpdef int init(self,
-#               np.ndarray[DTYPE_t, ndim=2] X,
-#               np.ndarray[DOUBLE_t, ndim=1, mode="c"] y) except -1:
-#    """Initialize the splitter.
-#
-#        Take in the input data X, the target Y, and optional sample weights.
-#
-#        Returns -1 in case of failure to allocate memory (and raise MemoryError)
-#        or 0 otherwise.
-#
-#        Parameters
-#        ----------
-#        X : object
-#            This contains the inputs. Usually it is a 2d numpy array.
-#
-#        y : numpy.ndarray, dtype=DOUBLE_t
-#            This is the vector of targets, or true labels, for the samples
-#
-#        sample_weight : numpy.ndarray, dtype=DOUBLE_t (optional)
-#            The weights of the samples, where higher weighted samples are fit
-#            closer than lower weight samples. If not provided, all samples
-#            are assumed to have uniform weight.
-#        """
-#
-#        pass
-
     cpdef np.ndarray[DOUBLE_t, ndim=1, mode="c"] predict(self, np.ndarray[DTYPE_t, ndim=2] X):
         pass
-
-
-
 
 
 cdef class MeanLeafMapper(LeafMapper):
@@ -77,27 +58,10 @@ cdef class MeanLeafMapper(LeafMapper):
     def __cinit__(self, double good_rate):
         self.good_rate = good_rate
 
-#    cpdef int init(self,
-#                   np.ndarray[DTYPE_t, ndim=2] X,
-#                   np.ndarray[DOUBLE_t, ndim=1, mode="c"] y) except -1:
-#
-#        self.good_rate = np.mean(y)
-
-
     cpdef np.ndarray[DOUBLE_t, ndim=1, mode="c"] predict(self, np.ndarray[DTYPE_t, ndim=2] X):
-        #print X.shape[0]
-        #print self.good_rate
-        #cdef np.ndarray[DOUBLE_t, ndim=1] leaf_vals = np.full(X.shape[0], self.good_rate, dtype='float32')
-        #return leaf_vals
-        #cdef int len = X.shape[0]
-        #print type(X.shape[0])
-        return np.full(X.shape[0], #3, #np.array([len]),
+        return np.full(X.shape[0],
                        self.good_rate,
                        dtype='float32')
-
-
-
-
 
 
 cdef class LeafMapperBuilder:
@@ -131,6 +95,19 @@ cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
 
 
 
+#cdef class LogitMapperBuilder(LeafMapperBuilder):
+
+
+#    cpdef LeafMapper build(self,
+#                   np.ndarray[DTYPE_t, ndim=2] X,
+#                   np.ndarray[DOUBLE_t, ndim=1, mode="c"] y):
+
+#        if len(y) > 0:
+
+#            return MeanLeafMapper(np.mean(y))
+#        else:
+#            return MeanLeafMapper(0)
+
 
 
 cdef class LossFunction:
@@ -144,11 +121,6 @@ cdef class LossFunction:
     cpdef DOUBLE_t loss(self,
                         np.ndarray[DOUBLE_t, ndim=1, mode="c"] truth,
                         np.ndarray[DOUBLE_t, ndim=1, mode="c"] predicted):
-        pass
-
-    cpdef DOUBLE_t combineLosses(self,
-                                 DOUBLE_t lossLeft, DOUBLE_t weightLeft,
-                                 DOUBLE_t lossRight, DOUBLE_t weightRight):
         pass
 
 
@@ -180,47 +152,52 @@ cdef class CrossEntropyLoss(LossFunction):
 
         assert len(truth) == len(predicted)
 
+        #TODO: Is this garbage collected?
         pred = np.clip(predicted, 0.00001, .99999)
 
         return (-1.0 * truth * np.log(pred) - (1.0 - truth) * np.log(1.0 - pred)).mean()
 
-        #for i in range(len(truth)):
-        #    entropy += -1.0 * truth[i] * log(pred[i]) - (1.0 - truth[i]) * log(1.0 - pred[i])
-        #    count += 1.0
 
-        #if count == 0:
-        #    return 1.0
-        #else:
-        #    return entropy / count
+cdef class ErrorRateLoss(LossFunction):
+    """
+    Loss is given by the fraction of incorrect classifications
+    """
 
+    cdef DOUBLE_t _threshold
 
-    cpdef DOUBLE_t combineLosses(self,
-                                 DOUBLE_t lossLeft, DOUBLE_t weightLeft,
-                                 DOUBLE_t lossRight, DOUBLE_t weightRight):
-
-        if weightLeft + weightRight == 0:
-            return 0.0
-        else:
-            print lossLeft, weightLeft, lossRight, weightRight
-            return (lossLeft * weightLeft + lossRight * weightRight) / (weightLeft + weightRight)
-
-
-cdef class SpitFinder:
-
-    def __cinit__(self):
-        pass
+    def __cinit__(self, DOUBLE_t threshold=0.5):
+        self._threshold = threshold
 
     def __dealloc__(self):
         """Destructor."""
         pass
 
-    cpdef tuple getBestSplit(self,
-                                int varIdx,
-                                set splitCandidates,
-                                np.ndarray[DOUBLE_t, ndim=2] X,
-                                np.ndarray[DOUBLE_t, ndim=1, mode="c"] Y,
-                                LeafMapperBuilder leafMapperBuilder,
-                                LossFunction lossFunction):
+    cpdef DOUBLE_t loss(self,
+                       np.ndarray[DOUBLE_t, ndim=1, mode="c"] truth,
+                       np.ndarray[DOUBLE_t, ndim=1, mode="c"] predicted):
+
+        assert len(truth) == len(predicted)
+
+        #cdef int numCorrect = 0
+        #cdef int numIncorrect = 0
+
+        if len(truth) == 0:
+            return 0.0
+
+        return (np.where(predicted > self._threshold, 1.0, 0.0) == truth).mean()
+
+        #pred = np.clip(predicted, 0.00001, .99999)
+
+        #return (-1.0 * truth * np.log(pred) - (1.0 - truth) * np.log(1.0 - pred)).mean()
+
+
+cpdef tuple getBestSplit(
+    np.ndarray[DOUBLE_t, ndim=2] X,
+    int varIdx,
+    np.ndarray[DOUBLE_t, ndim=1, mode="c"] Y,
+    LossFunction lossFunction,
+    LeafMapperBuilder leafMapperBuilder,
+    set splitCandidates):
 
         # Sort X and y by the variable in question
         # Iterate along the variable
@@ -267,11 +244,8 @@ cdef class SpitFinder:
             PRED_right = right_leaf_predict_fn.predict(X_right)
             right_loss = lossFunction.loss(Y_right, PRED_right)
 
-            avg_loss = lossFunction.combineLosses(left_loss, <double> len(X_left),
-                                                  right_loss, <double> len(X_right))
-
-            #if splitIdx % 100 == 0:
-            #    print "Split Idx: ", splitIdx, "split val: ", split_value, "Loss", avg_loss
+            avg_loss = combineLosses(left_loss, <double> len(X_left),
+                                     right_loss, <double> len(X_right))
 
             if avg_loss < best_loss:
                 best_split = split_value
