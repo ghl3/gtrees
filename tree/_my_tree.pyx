@@ -23,9 +23,8 @@ from ._utils cimport safe_realloc
 cdef double INFINITY = np.inf
 cdef double NEG_INFINITY = np.NINF
 
+from libc.stdlib cimport rand, RAND_MAX
 
-cpdef foo(FLOAT_t a):
-    return a*a
 
 
 cpdef FLOAT_t combineLosses(
@@ -101,7 +100,6 @@ cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
 
 
 #cdef class LogitMapperBuilder(LeafMapperBuilder):
-
 
 #    cpdef LeafMapper build(self,
 #                   np.ndarray[DTYPE_t, ndim=2] X,
@@ -227,6 +225,15 @@ cdef class ErrorRateLoss(LossFunction):
         #pred = np.clip(predicted, 0.00001, .99999)
 
         #return (-1.0 * truth * np.log(pred) - (1.0 - truth) * np.log(1.0 - pred)).mean()
+
+
+
+cdef class RandomLoss(LossFunction):
+    cpdef FLOAT_t loss(self,
+                        float[:] truth,
+                        float[:] predicted):
+        return rand()/(<float> RAND_MAX)
+
 
 
 cpdef tuple getBestSplit(
