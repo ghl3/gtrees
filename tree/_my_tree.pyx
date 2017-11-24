@@ -1,31 +1,23 @@
 # cython: cdivision=True
 # cython: boundscheck=False
 # cython: wraparound=False
-
-
-from libc.stdlib cimport free
-from libc.stdlib cimport qsort
-from libc.string cimport memcpy
-from libc.string cimport memset
+# cython: profile=True
+# cython: linetrace=True
 
 import numpy as np
 cimport numpy as np
 np.import_array()
 
-from scipy.sparse import csc_matrix
-
-from ._utils cimport log
-from ._utils cimport rand_int
-from ._utils cimport rand_uniform
-from ._utils cimport RAND_R_MAX
-from ._utils cimport safe_realloc
+from libc.math cimport log
 
 cdef double INFINITY = np.inf
 cdef double NEG_INFINITY = np.NINF
 
 from libc.stdlib cimport rand, RAND_MAX
 
-
+# Logit stuff
+from scipy.special import expit
+from sklearn.svm.base import _fit_liblinear
 
 cpdef FLOAT_t combineLosses(
     FLOAT_t lossLeft, FLOAT_t weightLeft,
@@ -50,19 +42,6 @@ cdef class LeafMapper:
         pass
 
 
-cdef class MeanLeafMapper(LeafMapper):
-
-    cdef double good_rate
-
-    def __cinit__(self, double good_rate):
-        self.good_rate = good_rate
-
-    cpdef np.ndarray[FLOAT_t, ndim=1, mode="c"] predict(self, float[:,:] X):
-        return np.full(len(X),
-                       self.good_rate,
-                       dtype='float32')
-
-
 cdef class LeafMapperBuilder:
 
     def __cinit__(self):
@@ -77,6 +56,21 @@ cdef class LeafMapperBuilder:
                            float[:,:] X,
                            float[:] y):
         pass
+
+
+cdef class MeanLeafMapper(LeafMapper):
+
+    cdef double good_rate
+
+    def __cinit__(self, double good_rate):
+        self.good_rate = good_rate
+
+    cpdef np.ndarray[FLOAT_t, ndim=1, mode="c"] predict(self, float[:,:] X):
+        return np.full(len(X),
+                       self.good_rate,
+                       dtype='float32')
+
+
 
 
 cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
@@ -99,18 +93,43 @@ cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
 
 
 
-#cdef class LogitMapperBuilder(LeafMapperBuilder):
 
-#    cpdef LeafMapper build(self,
-#                   np.ndarray[DTYPE_t, ndim=2] X,
-#                   np.ndarray[DOUBLE_t, ndim=1, mode="c"] y):
+cdef class LogitMapper(LeafMapper):
 
-#        if len(y) > 0:
+    cdef float[:] coeficients
+    cdef float intercept
 
-#            return MeanLeafMapper(np.mean(y))
-#        else:
-#            return MeanLeafMapper(0)
+    def __cinit__(self, coeficients, intercept):
+        self.coeficients = coeficients
+        self.intercept = intercept
 
+    cpdef np.ndarray[FLOAT_t, ndim=1, mode="c"] predict(self, float[:,:] X):
+
+        return expit(self.coeficients.dot(X.T) + self.intercept)
+
+
+cdef class LogitMapperBuilder(LeafMapperBuilder):
+
+    cpdef LeafMapper build(self,
+                           float[:,:] X,
+                           float[:] y):
+
+        if len(y) > 0:
+
+            coef_, intercept_, n_iter = _fit_liblinear(
+                X, np.ravel(y),
+                penalty='l1', C=1.0,
+                fit_intercept=True, intercept_scaling=1.0,
+                class_weight=None, sample_weight=None,
+                dual=False, verbose=True,
+                max_iter=5000, tol=1e-4, random_state=None,
+                )
+
+            #logit = sm.Logit(y, sm.add_constant(X))
+            #logit.fit().params
+            return LogitMapper(coef_, intercept_)
+        else:
+            return MeanLeafMapper(0.0)
 
 
 cdef class LossFunction:
@@ -167,10 +186,17 @@ cdef class CrossEntropyLoss(LossFunction):
             if pred > mx:
                 pred = mx
 
-            if pred < mn:
+            elif pred < mn:
                 pred = mn
 
-            loss += (-1.0 * truth[i] * log(pred) - (1.0 - truth[i]) * log(1.0 - pred))
+            if truth[i] > 0.5:
+                loss += -1.0 * log(pred)
+            else:
+                loss += -1.0 * log(1.0 - pred)
+
+#            else:
+#                raise Exception()
+#            loss += (-1.0 * truth[i] * log(pred) - (1.0 - truth[i]) * log(1.0 - pred))
 
         return loss / (<float> len(truth))
 

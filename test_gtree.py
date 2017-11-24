@@ -1,12 +1,19 @@
 import pandas as pd
+from pytest import approx
 
 import gtree
 
 import numpy as np
 
+import tree._my_tree
 
-def leaf_count_fn(val):
-    return lambda df: pd.Series([val for _ in range(len(df))], index=df.index)
+
+class StaticLeaf(object):
+    def __init__(self, val):
+        self.val = val
+
+    def predict(self, df):
+        return np.array([self.val for _ in range(len(df))])
 
 
 def test_tree_walking():
@@ -21,10 +28,37 @@ def test_tree_walking():
     t.right = gtree.LeafNode()  # 'A', 0.5, 100, 0)
 
     # Create a dummy leaf map
-    leaf_map = {hash(t.left): leaf_count_fn('LEFT'),
-                hash(t.right): leaf_count_fn('RIGHT')}
+    leaf_map = {hash(t.left): StaticLeaf('LEFT'),
+                hash(t.right): StaticLeaf('RIGHT')}
 
     assert {'baz': 'LEFT', 'foo': 'LEFT', 'bar': 'RIGHT'} == dict(t.predict(data, leaf_map))
+
+
+def test_error_rate_loss():
+    threshold = 0.5
+    truth = pd.Series([1, 0, 1], dtype=np.float32)
+    predicted = pd.Series([0, 1, 1], dtype=np.float32)
+    loss = tree._my_tree.ErrorRateLoss(threshold)
+
+    encountered_loss = gtree.loss(truth, predicted, type=loss)
+
+    expected_loss = 1.0 - ((predicted >= threshold) == truth).mean()
+
+    assert expected_loss == approx(encountered_loss)
+
+
+def test_cross_entropy_loss():
+    truth = pd.Series([1, 0, 1, 0, 1], dtype=np.float32)
+    predicted = pd.Series([0.1, .9, 0.2, .3, .88], dtype=np.float32)
+    loss = tree._my_tree.CrossEntropyLoss()
+
+    encountered_loss = gtree.loss(truth, predicted, type=loss)
+
+    from sklearn.metrics import log_loss
+
+    expected_loss = log_loss(truth, predicted) #1.0 - ((predicted >= threshold) == truth).mean()
+
+    assert expected_loss == approx(encountered_loss, rel=0.001)
 
 
 def test_leaf_building():
@@ -34,7 +68,7 @@ def test_leaf_building():
     target = pd.Series([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0])
 
     # Do a greedy fit to produce a leaf map
-    tree, leaf_map = gtree.train_greedy_tree(df, target, loss_fn=gtree.error_rate_loss)
+    tree, leaf_map = gtree.train_greedy_tree(df, target, loss='error_rate')
 
     predictions = dict(tree.predict(df, leaf_map))
 
@@ -63,11 +97,11 @@ def test_softmax_choice():
                   {'name': 'B', 'loss_testing': 20},
                   {'name': 'C', 'loss_testing': 30}]
 
-    probs = gtree.softmax(np.array([1.0/t['loss_testing'] for t in generation]))
+    probs = gtree.softmax(np.array([1.0 / t['loss_testing'] for t in generation]))
 
     print probs
     print probs.sum()
 
     np.random.choice(generation,
                      2,
-                     p=gtree.softmax(np.array([1.0/t['loss_testing'] for t in generation])))
+                     p=gtree.softmax(np.array([1.0 / t['loss_testing'] for t in generation])))

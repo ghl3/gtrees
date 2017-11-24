@@ -9,7 +9,7 @@ import pandas as pd
 
 from abc import ABCMeta, abstractmethod
 
-from sklearn.linear_model import LogisticRegression
+#from sklearn.linear_model import LogisticRegression
 
 tree_logger = logging.getLogger('tree')
 evolution_logger = logging.getLogger('evolution')
@@ -125,7 +125,6 @@ class LeafNode(Node):
 
 
 def _get_leaf_prediction_builder(leaf_prediction):
-
     if isinstance(leaf_prediction, tree._my_tree.LeafMapperBuilder):
         return leaf_prediction
 
@@ -133,7 +132,7 @@ def _get_leaf_prediction_builder(leaf_prediction):
         return tree._my_tree.MeanLeafMapperBuilder()
 
     elif leaf_prediction == 'logit':
-        raise NotImplementedError()
+        return tree._my_tree.LogitMapperBuilder()
 
     else:
         raise Exception()
@@ -141,7 +140,6 @@ def _get_leaf_prediction_builder(leaf_prediction):
 
 # tree._my_tree.MeanLeafMapperBuilder()
 def _get_loss_function(loss):
-
     if isinstance(loss, tree._my_tree.LossFunction):
         return loss
 
@@ -156,6 +154,11 @@ def _get_loss_function(loss):
 
     else:
         raise Exception()
+
+
+def loss(truth, predicted, type):
+    loss_fn = _get_loss_function(type)
+    return loss_fn.loss(truth.values, predicted.values)
 
 
 #
@@ -381,9 +384,6 @@ def _get_split_candidates(srs, threshold=100):
         # return list(pd.qcut(srs, threshold, labels=False, retbins=True, duplicates='drop')[1])
 
 
-
-
-
 def _single_variable_best_split(df, var, target, loss='cross_entropy', leaf_prediction='mean', candidates=None):
     """
     Takes a DataFrame of features, a variable name,
@@ -588,7 +588,6 @@ def train_random_trees(df,
                        min_to_split=None,
                        num_trees=10,
                        num_split_candidates=50):
-
     loss_fn = _get_loss_function(loss)
     leaf_prediction_builder = _get_leaf_prediction_builder(leaf_prediction)
 
@@ -674,7 +673,6 @@ def evolve(df,
            num_children=50,
            num_split_candidates=50,
            num_seed_trees=5):
-
     loss_fn = _get_loss_function(loss)
     leaf_prediction_builder = _get_leaf_prediction_builder(leaf_prediction)
 
