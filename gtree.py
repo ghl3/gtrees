@@ -138,6 +138,11 @@ def _get_leaf_prediction_builder(leaf_prediction):
         raise Exception()
 
 
+def get_leaf_predictor(X, y, type):
+    builder = _get_leaf_prediction_builder(type)
+    return builder.build(X, y)
+
+
 # tree._my_tree.MeanLeafMapperBuilder()
 def _get_loss_function(loss):
     if isinstance(loss, tree._my_tree.LossFunction):

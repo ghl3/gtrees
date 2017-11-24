@@ -71,41 +71,53 @@ cdef class MeanLeafMapper(LeafMapper):
                        dtype='float32')
 
 
-
-
 cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
 
     cpdef LeafMapper build(self,
                            float[:,:] X,
                            float[:] y):
 
-        if len(y) > 0:
 
-            goodRate = 0.0
+        cdef float goodRate = 0.0
+
+        if len(y) > 0:
             for i in range(len(y)):
                 if y[i] == 1.0:
-                    goodRate += 1
-                goodRate /= (<float> len(y))
+                    goodRate += 1.0
 
+            goodRate /= (<float> len(y))
             return MeanLeafMapper(goodRate)
         else:
             return MeanLeafMapper(0.0)
 
 
-
-
 cdef class LogitMapper(LeafMapper):
+    def __cinit__(self):
+        pass
+
+    def __dealloc__(self):
+        """Destructor."""
+        pass
 
     cdef float[:] coeficients
     cdef float intercept
 
     def __cinit__(self, coeficients, intercept):
-        self.coeficients = coeficients
+        self.coeficients = coeficients #.copy()
         self.intercept = intercept
 
     cpdef np.ndarray[FLOAT_t, ndim=1, mode="c"] predict(self, float[:,:] X):
+        return expit(np.dot(X, self.coeficients.T) + self.intercept)
+        #return expit(0.0 + self.intercept)
+        #return 0.0
 
-        return expit(self.coeficients.dot(X.T) + self.intercept)
+    cpdef np.ndarray[FLOAT_t, ndim=1, mode="c"] get_coeficients(self):
+        return np.asarray(self.coeficients)
+
+    cpdef float get_intercept(self):
+        return self.intercept
+
+
 
 
 cdef class LogitMapperBuilder(LeafMapperBuilder):
@@ -116,18 +128,16 @@ cdef class LogitMapperBuilder(LeafMapperBuilder):
 
         if len(y) > 0:
 
-            coef_, intercept_, n_iter = _fit_liblinear(
-                X, np.ravel(y),
+             coefs, intercept, _ = _fit_liblinear(
+                np.asarray(X, dtype=np.float64),
+                np.asarray(np.ravel(y), dtype=np.float64),
                 penalty='l1', C=1.0,
                 fit_intercept=True, intercept_scaling=1.0,
                 class_weight=None, sample_weight=None,
-                dual=False, verbose=True,
-                max_iter=5000, tol=1e-4, random_state=None,
-                )
+                dual=False, verbose=False,
+                max_iter=50, tol=1e-3, random_state=None)
 
-            #logit = sm.Logit(y, sm.add_constant(X))
-            #logit.fit().params
-            return LogitMapper(coef_, intercept_)
+             return LogitMapper(np.asarray(coefs[0], dtype=np.float32), intercept)
         else:
             return MeanLeafMapper(0.0)
 
