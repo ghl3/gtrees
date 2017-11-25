@@ -20,7 +20,7 @@ cdef class LeafMapperBuilder:
                          float[:] y)
 
 cdef class LossFunction:
-    cpdef FLOAT_t loss(self,
+    cpdef float loss(self,
                         float[:] truth,
                         float[:] predicted)
 
