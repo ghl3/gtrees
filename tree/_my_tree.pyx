@@ -4,32 +4,17 @@
 # cython: profile=False
 # cython: linetrace=False
 
-
-import warnings
-
-import numbers
-
+from libc.math cimport log
+from libc.stdlib cimport rand, RAND_MAX
 
 import numpy as np
 cimport numpy as np
 np.import_array()
-
-from libc.math cimport log
-
-#cdef double INFINITY = np.inf
-#cdef double NEG_INFINITY = np.NINF
-
 from numpy.math cimport INFINITY
-
-
-from libc.stdlib cimport rand, RAND_MAX
 
 # Logit stuff
 from scipy.special import expit
-from sklearn.svm.base import _get_liblinear_solver_type, _fit_liblinear
-from sklearn.svm import libsvm, liblinear
-
-
+from sklearn.svm.base import _fit_liblinear
 
 cdef float combineLosses(
     float lossLeft, float weightLeft,
