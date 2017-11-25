@@ -1,8 +1,14 @@
 # cython: cdivision=True
 # cython: boundscheck=False
 # cython: wraparound=False
-# cython: profile=True
-# cython: linetrace=True
+# cython: profile=False
+# cython: linetrace=False
+
+
+import warnings
+
+import numbers
+
 
 import numpy as np
 cimport numpy as np
@@ -10,18 +16,24 @@ np.import_array()
 
 from libc.math cimport log
 
-cdef double INFINITY = np.inf
-cdef double NEG_INFINITY = np.NINF
+#cdef double INFINITY = np.inf
+#cdef double NEG_INFINITY = np.NINF
+
+from numpy.math cimport INFINITY
+
 
 from libc.stdlib cimport rand, RAND_MAX
 
 # Logit stuff
 from scipy.special import expit
-from sklearn.svm.base import _fit_liblinear
+from sklearn.svm.base import _get_liblinear_solver_type, _fit_liblinear
+from sklearn.svm import libsvm, liblinear
 
-cpdef FLOAT_t combineLosses(
-    FLOAT_t lossLeft, FLOAT_t weightLeft,
-    FLOAT_t lossRight, FLOAT_t weightRight):
+
+
+cdef float combineLosses(
+    float lossLeft, float weightLeft,
+    float lossRight, float weightRight) nogil:
 
         if weightLeft + weightRight == 0:
             return 0.0
@@ -31,26 +43,11 @@ cpdef FLOAT_t combineLosses(
 
 cdef class LeafMapper:
 
-    def __cinit__(self):
-        pass
-
-    def __dealloc__(self):
-        """Destructor."""
-        pass
-
     cpdef np.ndarray[FLOAT_t, ndim=1, mode="c"] predict(self, float[:,:] X):
         pass
 
 
 cdef class LeafMapperBuilder:
-
-    def __cinit__(self):
-        pass
-
-
-    def __dealloc__(self):
-        """Destructor."""
-        pass
 
     cpdef LeafMapper build(self,
                            float[:,:] X,
@@ -77,7 +74,6 @@ cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
                            float[:,:] X,
                            float[:] y):
 
-
         cdef float goodRate = 0.0
 
         if len(y) > 0:
@@ -92,17 +88,11 @@ cdef class MeanLeafMapperBuilder(LeafMapperBuilder):
 
 
 cdef class LogitMapper(LeafMapper):
-    def __cinit__(self):
-        pass
-
-    def __dealloc__(self):
-        """Destructor."""
-        pass
 
     cdef float[:] coeficients
     cdef float intercept
 
-    def __cinit__(self, coeficients, intercept):
+    def __cinit__(self, float[:] coeficients, float intercept):
         self.coeficients = coeficients #.copy()
         self.intercept = intercept
 
@@ -126,7 +116,10 @@ cdef class LogitMapperBuilder(LeafMapperBuilder):
                            float[:,:] X,
                            float[:] y):
 
-        if len(y) > 0:
+
+        target_vals = list(set(y))
+
+        if len(target_vals) == 2:
 
              coefs, intercept, _ = _fit_liblinear(
                 np.asarray(X, dtype=np.float64),
@@ -138,8 +131,12 @@ cdef class LogitMapperBuilder(LeafMapperBuilder):
                 max_iter=50, tol=1e-3, random_state=None)
 
              return LogitMapper(np.asarray(coefs[0], dtype=np.float32), intercept)
+        elif len(target_vals) == 1:
+            return MeanLeafMapper(target_vals[0])
+        elif len(target_vals) == 0:
+            return MeanLeafMapper(0)
         else:
-            return MeanLeafMapper(0.0)
+            raise Exception()
 
 
 cdef class LossFunction:
@@ -182,14 +179,16 @@ cdef class CrossEntropyLoss(LossFunction):
         if len(truth) == 0.0:
             return 0.0
 
-        assert len(truth) == len(predicted)
+        assert truth.shape[0] == predicted.shape[0]
 
         cdef float loss = 0.0
         cdef float mn = 0.00001
         cdef float mx = 0.99999
         cdef float pred = 0.0
 
-        for i in range(len(truth)):
+        cdef int i = 0
+
+        for i in range(truth.shape[0]):
 
             pred = predicted[i]
 
@@ -199,21 +198,12 @@ cdef class CrossEntropyLoss(LossFunction):
             elif pred < mn:
                 pred = mn
 
-            if truth[i] > 0.5:
+            if truth[i] >= 0.5:
                 loss += -1.0 * log(pred)
             else:
                 loss += -1.0 * log(1.0 - pred)
 
-#            else:
-#                raise Exception()
-#            loss += (-1.0 * truth[i] * log(pred) - (1.0 - truth[i]) * log(1.0 - pred))
-
-        return loss / (<float> len(truth))
-
-        #TODO: Is this garbage collected?
-        #pred = np.clip(predicted, 0.00001, .99999)
-
-        #return ).mean()
+        return loss / (<float> truth.shape[0])
 
 
 cdef class ErrorRateLoss(LossFunction):
@@ -294,9 +284,9 @@ cpdef tuple getBestSplit(
         cdef float[:] YY = np.asarray(Y)[order, ]
 
         cdef FLOAT_t best_loss = INFINITY
-        cdef FLOAT_t best_split = NEG_INFINITY
+        cdef FLOAT_t best_split = -1*INFINITY
 
-        cdef FLOAT_t split_value = NEG_INFINITY
+        cdef FLOAT_t split_value = -1* INFINITY
 
         #cdef np.ndarray[DOUBLE_t, ndim=1, mode="c"] PRED_left = None
         #cdef np.ndarray[DOUBLE_t, ndim=1, mode="c"] PRED_right = None
@@ -337,3 +327,83 @@ cpdef tuple getBestSplit(
                 best_loss = avg_loss
 
         return (best_split, best_loss)
+
+
+
+def check_random_state(seed):
+    """Turn seed into a np.random.RandomState instance
+
+    Parameters
+    ----------
+    seed : None | int | instance of RandomState
+        If seed is None, return the RandomState singleton used by np.random.
+        If seed is an int, return a new RandomState instance seeded with seed.
+        If seed is already a RandomState instance, return it.
+        Otherwise raise ValueError.
+    """
+    if seed is None or seed is np.random:
+        return np.random.mtrand._rand
+    if isinstance(seed, (numbers.Integral, np.integer)):
+        return np.random.RandomState(seed)
+    if isinstance(seed, np.random.RandomState):
+        return seed
+    raise ValueError('%r cannot be used to seed a numpy.random.RandomState'
+                     ' instance' % seed)
+
+
+def _bad_fit_liblinear(X, y, C, fit_intercept, intercept_scaling, class_weight,
+                   penalty, dual, verbose, max_iter, tol,
+                   random_state=None, multi_class='ovr',
+                   loss='logistic_regression', epsilon=0.1,
+                   sample_weight=None):
+
+    class_weight_ = np.array([1.0, 1.0], dtype=np.float64, order='C')
+
+    liblinear.set_verbosity_wrap(verbose)
+    rnd = check_random_state(random_state)
+
+    # LinearSVC breaks when intercept_scaling is <= 0
+    bias = -1.0
+    if fit_intercept:
+        if intercept_scaling <= 0:
+            raise ValueError("Intercept scaling is %r but needs to be greater than 0."
+                             " To disable fitting an intercept,"
+                             " set fit_intercept=False." % intercept_scaling)
+        else:
+            bias = intercept_scaling
+
+    libsvm.set_verbosity_wrap(verbose)
+    liblinear.set_verbosity_wrap(verbose)
+
+    # LibLinear wants targets as doubles, even for classification
+    y_ind = np.asarray(y, dtype=np.float64).ravel()
+
+    if sample_weight is None:
+        sample_weight = np.ones(X.shape[0])
+    else:
+        sample_weight = np.array(sample_weight, dtype=np.float64, order='C')
+        assert len(sample_weight) == len(y)
+
+    solver_type = _get_liblinear_solver_type(multi_class, penalty, loss, dual)
+    raw_coef_, n_iter_ = liblinear.train_wrap(
+        X, y_ind, False, solver_type, tol, bias, C,
+        class_weight_, max_iter, rnd.randint(np.iinfo('i').max),
+        epsilon, sample_weight)
+
+    # Regarding rnd.randint(..) in the above signature:
+    # seed for srand in range [0..INT_MAX); due to limitations in Numpy
+    # on 32-bit platforms, we can't get to the UINT_MAX limit that
+    # srand supports
+    n_iter_ = max(n_iter_)
+    if n_iter_ >= max_iter and verbose > 0:
+        warnings.warn("Liblinear failed to converge, increase "
+                      "the number of iterations.", UserWarning)
+
+    if fit_intercept:
+        coef_ = raw_coef_[:, :-1]
+        intercept_ = intercept_scaling * raw_coef_[:, -1]
+    else:
+        coef_ = raw_coef_
+        intercept_ = 0.
+
+    return coef_, intercept_, n_iter_

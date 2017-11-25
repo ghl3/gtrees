@@ -73,7 +73,7 @@ class BranchNode(Node):
 
         for _ in range(indent):
             print '\t',
-        print "{} {}\n".format(self.var_name, self.split)
+        print "{} {:.5f}".format(self.var_name, self.split)
 
         if self.right:
             self.right.prn(indent + 1)
@@ -108,7 +108,7 @@ class LeafNode(Node):
 
         for _ in range(indent):
             print '\t',
-        print "Leaf(id={})\n".format(self._code)
+        print "<Leaf>".format(self._code)
 
     def __eq__(self, o):
         return isinstance(o, LeafNode) and self._code == o._code
