@@ -1,8 +1,8 @@
 # cython: cdivision=True
 # cython: boundscheck=False
 # cython: wraparound=False
-# cython: profile=False
-# cython: linetrace=False
+# cython: profile=True
+# cython: linetrace=True
 
 from libc.math cimport log
 from libc.stdlib cimport rand, RAND_MAX
@@ -99,11 +99,9 @@ cdef class LogitMapperBuilder(LeafMapperBuilder):
                            float[:,:] X,
                            float[:] y):
 
-
         target_vals = list(set(y))
 
         if len(target_vals) == 2:
-
              coefs, intercept, _ = _fit_liblinear(
                 np.asarray(X, dtype=np.float64),
                 np.asarray(np.ravel(y), dtype=np.float64),
@@ -112,12 +110,14 @@ cdef class LogitMapperBuilder(LeafMapperBuilder):
                 class_weight=None, sample_weight=None,
                 dual=False, verbose=False,
                 max_iter=50, tol=1e-3, random_state=None)
-
              return LogitMapper(np.asarray(coefs[0], dtype=np.float32), intercept)
+
         elif len(target_vals) == 1:
             return MeanLeafMapper(target_vals[0])
+
         elif len(target_vals) == 0:
             return MeanLeafMapper(0)
+
         else:
             raise Exception()
 
@@ -150,6 +150,9 @@ cdef class CrossEntropyLoss(LossFunction):
                        float[:] truth,
                        float[:] predicted):
 
+        DEF mn = 0.00001
+        DEF mx = 0.99999
+
         cdef float entropy = 0.0
         cdef float count = 0.0
 
@@ -159,8 +162,7 @@ cdef class CrossEntropyLoss(LossFunction):
         assert truth.shape[0] == predicted.shape[0]
 
         cdef float loss = 0.0
-        cdef float mn = 0.00001
-        cdef float mx = 0.99999
+
         cdef float pred = 0.0
 
         cdef int i = 0
@@ -240,6 +242,16 @@ cpdef tuple getBestSplit(
         cdef float[:,:] XX = np.asarray(X)[order,]
         cdef float[:] YY = np.asarray(Y)[order, ]
 
+        cdef float[:,:] X_left
+        cdef float[:,:] X_right
+
+        cdef float[:] Y_left
+        cdef float[:] Y_right
+
+        cdef float left_loss
+        cdef float right_loss
+        cdef float avg_loss
+
         cdef float best_loss = INFINITY
         cdef float best_split = -1*INFINITY
 
@@ -267,14 +279,13 @@ cpdef tuple getBestSplit(
             left_loss = lossFunction.loss(Y_left, left_leaf_predict_fn.predict(X_left))
 
             # These should be views, not copies
-            X_right = XX[splitIdx:len(XX), :]
-            Y_right = YY[splitIdx:len(YY)]
+            X_right = XX[splitIdx:XX.shape[0], :]
+            Y_right = YY[splitIdx:YY.shape[0]]
             right_leaf_predict_fn = leafMapperBuilder.build(X_right, Y_right)
-            #cdef double[:] PRED_right =
             right_loss = lossFunction.loss(Y_right, right_leaf_predict_fn.predict(X_right))
 
-            avg_loss = combineLosses(left_loss, <double> len(X_left),
-                                     right_loss, <double> len(X_right))
+            avg_loss = combineLosses(left_loss, <double> X_left.shape[0],
+                                     right_loss, <double> X_right.shape[0])
 
             if avg_loss < best_loss:
                 best_split = split_value

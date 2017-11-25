@@ -106,7 +106,7 @@ def test_softmax():
     probs = gtree.softmax(np.array([1.0 / t['loss_testing'] for t in generation]))
 
     print probs, probs.dtype
-    assert list([ 0.34641195,  0.32951724,  0.3240708 ]) == approx(list(probs))
+    assert list([0.34641195, 0.32951724, 0.3240708]) == approx(list(probs))
 
 
 def test_greedy_tree_builder():
@@ -126,3 +126,33 @@ def test_greedy_tree_builder():
 
     # Apply the leaf map
     print gtree.calculate_leaf_map(tree, df, target)
+
+
+def test_random_tree():
+    # Create test features and target
+    df = pd.DataFrame({'A': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                       'B': [10, 20, 50, 30, 40, 50, 60, 50, 70, 90, 100, 110]}, dtype=np.float32)
+    target = pd.Series([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0], dtype=np.float32)
+
+    best, history = gtree.train_random_trees(df, target,
+                                             loss='cross_entropy',
+                                             leaf_prediction='mean')
+    # Do a greedy fit to produce a leaf map
+    best.prn()
+
+    assert isinstance(best, dict)
+    assert isinstance(best['tree'], gtree.BranchNode)
+
+
+def test_evolution():
+    # Create test features and target
+    df = pd.DataFrame({'A': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                       'B': [10, 20, 50, 30, 40, 50, 60, 50, 70, 90, 100, 110]}, dtype=np.float32)
+    target = pd.Series([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0], dtype=np.float32)
+
+    # Do a greedy fit to produce a leaf map
+    best, history = gtree.evolve(df, target, loss='error_rate', leaf_prediction='mean',
+                                 num_generations=4, num_seed_trees=3)
+
+    assert isinstance(best, dict)
+    assert isinstance(best['tree'], gtree.BranchNode)

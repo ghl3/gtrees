@@ -9,8 +9,6 @@ import pandas as pd
 
 from abc import ABCMeta, abstractmethod
 
-#from sklearn.linear_model import LogisticRegression
-
 tree_logger = logging.getLogger('tree')
 evolution_logger = logging.getLogger('evolution')
 
@@ -292,7 +290,9 @@ def mate(mother, father):
         if isinstance(child, LeafNode):
             return child
 
-        if random.choice([True, False]):
+        # Do we do a full subtree replacement
+        # or do we modify a branch node?
+        if not isinstance(father, LeafNode) and random.choice([True, False]):
             to_replace = random_branch_node(child)
             replace_with = random_branch_node(father)
             child = replace_branch_split(child, to_replace, replace_with)
@@ -357,6 +357,9 @@ def prune(tree, max_depth=None, current_depth=0):
     """
 
     if isinstance(tree, LeafNode):
+        return tree
+
+    elif max_depth is None:
         return tree
 
     else:
@@ -593,6 +596,7 @@ def train_random_trees(df,
                        min_to_split=None,
                        num_trees=10,
                        num_split_candidates=50):
+
     loss_fn = _get_loss_function(loss)
     leaf_prediction_builder = _get_leaf_prediction_builder(leaf_prediction)
 
@@ -606,13 +610,15 @@ def train_random_trees(df,
     var_split_candidate_map = {var: _get_split_candidates(df[var], threshold=num_split_candidates) for var in
                                df.columns}
 
-    trees = []
+    tree_infos = []
 
     num_grown_trees = 0
 
     while num_grown_trees < num_trees:
 
-        if random.choice([True, False]):
+        random_type = random.choice(['alpha', 'beta'])
+
+        if random_type == 'alpha':
 
             df_alpha = sample(df_train, row_frac=0.5)
             target_alpha = target_train.loc[df_alpha.index]
@@ -624,8 +630,8 @@ def train_random_trees(df,
                 max_depth=max_depth,
                 min_to_split=min_to_split,
                 var_split_candidate_map=var_split_candidate_map)
-            trees.append(('alpha', tree))
-            num_grown_trees += 1
+            #trees.append(('alpha', tree))
+            #num_grown_trees += 1
 
         else:
             tree, _ = train_greedy_tree(
@@ -638,22 +644,35 @@ def train_random_trees(df,
                 feature_sample_rate=0.5,
                 row_sample_rate=0.5,
                 var_split_candidate_map=var_split_candidate_map)
-            trees.append(('beta', tree))
-            num_grown_trees += 1
+            #trees.append(('beta', tree))
+            #num_grown_trees += 1
+
+        #trees.append({'tree': tree,
+        #              'random_type': random_type})
+        num_grown_trees += 1
 
         # For each tree shape, calculate the leaf performance
         # on the full training data
-        trees_and_leaf_map = [(type, tree, calculate_leaf_map(tree, df_train, target_train, leaf_prediction_builder))
-                              for type, tree in trees]
+        #trees_and_leaf_map = [(type, tree, calculate_leaf_map(tree, df_train, target_train, leaf_prediction_builder))
+        #                      for type, tree in trees]
+
+        tree_info = {'tree': tree,
+                     'random_type': random_type}
 
         # Calculate the loss on the generation
-        results = calculate_losses(trees,
+        loss_info = calculate_loss(tree,
                                    leaf_prediction_builder,
                                    loss_fn,
                                    df_train, target_train,
                                    df_test, target_test)
 
-        best_result = results[0]
+        tree_info.update(loss_info)
+        tree_infos.append(tree_info)
+
+        #for tree, result in zip(trees, results):
+
+        tree_infos = sorted(tree_infos, key=lambda x: x['loss_testing'])
+        best_result = tree_infos[0]
 
         # best_type, best_tree, loss_hold_out = \
         #    sorted_trees_and_losses(trees_and_leaf_map, df_test, target_test, loss_fn)[0]
@@ -664,7 +683,7 @@ def train_random_trees(df,
             best_result['loss_training'],
             best_result['loss_testing']))
 
-    return best_result
+    return best_result, tree_infos
 
 
 def evolve(df,
@@ -735,8 +754,9 @@ def evolve(df,
         probs = softmax(1.0 - losses / np.mean(losses))
         for _ in range(num_children):
             mother, father = np.random.choice(generation, 2, p=probs)
-
             child = mate(mother['tree'], father['tree'])
+            if isinstance(child, LeafNode):
+                continue
             child = mutate(child, df_gen, target_gen, loss_fn, leaf_prediction_builder)
             child = prune(child, max_depth=max_depth)
             children.append({'gen': max(mother['gen'], father['gen']) + 1,
@@ -754,6 +774,7 @@ def evolve(df,
                                   df_gen, target_gen,
                                   df_test, target_test)
 
+        # Update the losses in the generation
         for tree, losses in zip(generation, losses):
             tree['loss_training'] = losses['loss_training']
             tree['loss_testing'] = losses['loss_testing']
@@ -782,23 +803,47 @@ def evolve(df,
     return best_result, generation_info
 
 
-def calculate_losses(trees,
+
+def calculate_loss(tree,
+                   leaf_prediction_builder,
+                   loss_fn,
+                   df_train, target_train,
+                   df_test, target_test):
+
+    # Calculate the leaf map on the training data
+    leaf_map = calculate_leaf_map(tree, df_train, target_train, leaf_prediction_builder)
+
+    loss_training = loss_fn.loss(tree.predict(df_train, leaf_map).values, target_train.values)
+    loss_testing = loss_fn.loss(tree.predict(df_test, leaf_map).values, target_test.values)
+
+    return {
+        'loss_training': loss_training,
+        'loss_testing': loss_testing
+    }
+
+
+def calculate_losses(tree_infos,
                      leaf_prediction_builder,
                      loss_fn,
                      df_train, target_train,
                      df_test, target_test):
     results = []
 
-    for info in trees:
+    for info in tree_infos:
+
+        loss_info = calculate_loss(info['tree'], leaf_prediction_builder, loss_fn,
+                                   df_train, target_train,
+                                   df_test, target_test)
+
         # Calculate the leaf map on the training data
-        leaf_map = calculate_leaf_map(info['tree'], df_train, target_train, leaf_prediction_builder)
+#        leaf_map = calculate_leaf_map(info['tree'], df_train, target_train, leaf_prediction_builder)
 
-        loss_training = loss_fn.loss(info['tree'].predict(df_train, leaf_map).values, target_train.values)
-        loss_testing = loss_fn.loss(info['tree'].predict(df_test, leaf_map).values, target_test.values)
+#        loss_training = loss_fn.loss(info['tree'].predict(df_train, leaf_map).values, target_train.values)
+#        loss_testing = loss_fn.loss(info['tree'].predict(df_test, leaf_map).values, target_test.values)
 
-        results.append({
-            'loss_training': loss_training,
-            'loss_testing': loss_testing})
+        results.append(loss_info) #{
+#            'loss_training': loss_training,
+#            'loss_testing': loss_testing})
 
     return results
 
