@@ -132,6 +132,9 @@ def test_greedy_tree_builder():
 
 
 def test_random_tree():
+
+    # Flakey :sadpanda:
+
     # Create test features and target
     df = pd.DataFrame({'A': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
                        'B': [10, 20, 50, 30, 40, 50, 60, 50, 70, 90, 100, 110]}, dtype=np.float32)

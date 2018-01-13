@@ -509,11 +509,11 @@ def train_greedy_tree(df,
     right_criteria = df[var] >= split
 
     # Handle the (odd) case where the split
-    # moves all noes to one way or another
+    # moves all nodes to one way or another
     if left_criteria.sum() == 0 or right_criteria.sum() == 0:
         tree_logger.info("No split improves loss.  Returning")
         leaf = LeafNode()
-        leaf_map[hash(leaf)] = leaf_prediction_builder.build(df, target)
+        leaf_map[hash(leaf)] = leaf_prediction_builder.build(df.values, target.values)
         return leaf, leaf_map
 
     left_tree, left_map = train_greedy_tree(df[left_criteria],
@@ -578,6 +578,7 @@ def train_random_trees(df,
                        min_to_split=None,
                        num_trees=10,
                        num_split_candidates=50):
+
     loss_fn = _get_loss_function(loss)
     leaf_prediction_builder = _get_leaf_prediction_builder(leaf_prediction)
 
@@ -603,6 +604,7 @@ def train_random_trees(df,
 
             df_alpha = sample(df_train, row_frac=0.5)
             target_alpha = target_train.loc[df_alpha.index]
+
             tree, _ = train_greedy_tree(
                 df=df_alpha,
                 target=target_alpha,
