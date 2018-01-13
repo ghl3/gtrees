@@ -12,7 +12,7 @@ from abc import ABCMeta, abstractmethod
 tree_logger = logging.getLogger('tree')
 evolution_logger = logging.getLogger('evolution')
 
-import tree._my_tree
+import tree._tree
 
 
 class Node(object):
@@ -34,7 +34,7 @@ class Node(object):
         results = []
 
         for leaf_hash, df_leaf in df.groupby(leaf_for_row):
-            predict_fn = leaf_score_map.get(leaf_hash, tree._my_tree.MeanLeafMapper(0.5))
+            predict_fn = leaf_score_map.get(leaf_hash, tree._tree.MeanLeafMapper(0.5))
             # The predict_fn return a np array,
             # so we have to convert it back to a pd Series
             predictions = pd.Series(predict_fn.predict(df_leaf.values), index=df_leaf.index)
@@ -123,14 +123,14 @@ class LeafNode(Node):
 
 
 def _get_leaf_prediction_builder(leaf_prediction):
-    if isinstance(leaf_prediction, tree._my_tree.LeafMapperBuilder):
+    if isinstance(leaf_prediction, tree._tree.LeafMapperBuilder):
         return leaf_prediction
 
     elif leaf_prediction == 'mean':
-        return tree._my_tree.MeanLeafMapperBuilder()
+        return tree._tree.MeanLeafMapperBuilder()
 
     elif leaf_prediction == 'logit':
-        return tree._my_tree.LogitMapperBuilder()
+        return tree._tree.LogitMapperBuilder()
 
     else:
         raise Exception()
@@ -142,17 +142,17 @@ def get_leaf_predictor(X, y, type):
 
 
 def _get_loss_function(loss):
-    if isinstance(loss, tree._my_tree.LossFunction):
+    if isinstance(loss, tree._tree.LossFunction):
         return loss
 
     elif loss == 'cross_entropy':
-        return tree._my_tree.CrossEntropyLoss()
+        return tree._tree.CrossEntropyLoss()
 
     elif loss == 'error_rate':
-        return tree._my_tree.ErrorRateLoss()
+        return tree._tree.ErrorRateLoss()
 
     elif loss == 'random':
-        return tree._my_tree.RandomLoss()
+        return tree._tree.RandomLoss()
 
     else:
         raise Exception()
@@ -404,7 +404,7 @@ def _single_variable_best_split(df, var, target, loss='cross_entropy', leaf_pred
     else:
         candidates = set(candidates)
 
-    return tree._my_tree.getBestSplit(
+    return tree._tree.getBestSplit(
         np_features,
         var_idx,
         np_targets,

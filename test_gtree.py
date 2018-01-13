@@ -1,12 +1,11 @@
 import pandas as pd
-from numpy.testing import assert_array_equal
 from pytest import approx
 
 import gtree
 
 import numpy as np
 
-import tree._my_tree
+import tree._tree
 
 
 class StaticLeaf(object):
@@ -39,7 +38,7 @@ def test_error_rate_loss():
     threshold = 0.5
     truth = pd.Series([1, 0, 1], dtype=np.float32)
     predicted = pd.Series([0, 1, 1], dtype=np.float32)
-    loss = tree._my_tree.ErrorRateLoss(threshold)
+    loss = tree._tree.ErrorRateLoss(threshold)
 
     encountered_loss = gtree.loss(truth, predicted, type=loss)
 
@@ -51,7 +50,7 @@ def test_error_rate_loss():
 def test_cross_entropy_loss():
     truth = pd.Series([1, 0, 1, 0, 1], dtype=np.float32)
     predicted = pd.Series([0.1, .9, 0.2, .3, .88], dtype=np.float32)
-    loss = tree._my_tree.CrossEntropyLoss()
+    loss = tree._tree.CrossEntropyLoss()
 
     encountered_loss = gtree.loss(truth, predicted, type=loss)
 
