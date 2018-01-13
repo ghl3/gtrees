@@ -75,15 +75,18 @@ def test_mean_leaf_builder():
 
 def test_logit_leaf_builder():
     # Create test features and target
-    df = pd.DataFrame({'A': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-                       'B': [10, 20, 50, 30, 40, 50, 60, 50, 70, 90, 100, 110]}, dtype=np.float32)
-    target = pd.Series([0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 1], dtype=np.float32)
+    df = pd.DataFrame({'A': [ 1,  1,  1,  1, 1,  0,  0,  0,  0, 0],
+                       'B': [.2, .4, .6, .8, 1, 1.2, 1.4, 1.6, 1.8, 2]}, dtype=np.float32)
+    target = pd.Series([0, 0, 1, 0, 0, 1, 1, 1, 0, 1], dtype=np.float32)
 
-    # The leaf prediction is the mean good rate in his set of leaves, or 1/3
+    # The leaf prediction is a logit of the features within each leaf node
     predictor = gtree.get_leaf_predictor(df.values, target.values, type='logit')
-    print predictor.get_coeficients()
-    print predictor.get_intercept()
-    assert np.array([0.4499, 0.4897, 0.6105, 0.5282]) == approx(predictor.predict(df.values[:4]), rel=0.001)
+    coefs = predictor.get_coeficients()
+
+    # Assert that the coeficient directions make sense
+    assert coefs[0] < 0
+    assert coefs[1] > 0
+
 
 
 def test_tree_equality():
@@ -134,14 +137,15 @@ def test_random_tree():
                        'B': [10, 20, 50, 30, 40, 50, 60, 50, 70, 90, 100, 110]}, dtype=np.float32)
     target = pd.Series([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0], dtype=np.float32)
 
-    best, history = gtree.train_random_trees(df, target,
+    best_info, history = gtree.train_random_trees(df, target,
                                              loss='cross_entropy',
                                              leaf_prediction='mean')
     # Do a greedy fit to produce a leaf map
-    best.prn()
+    best_tree = best_info['tree']
+    best_tree.prn()
 
-    assert isinstance(best, dict)
-    assert isinstance(best['tree'], gtree.BranchNode)
+    assert isinstance(best_info, dict)
+    assert isinstance(best_info['tree'], gtree.BranchNode)
 
 
 def test_evolution():
