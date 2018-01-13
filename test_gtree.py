@@ -161,4 +161,4 @@ def test_evolution():
                                  num_generations=4, num_seed_trees=3)
 
     assert isinstance(best, dict)
-    assert isinstance(best['tree'], gtree.BranchNode)
+    assert isinstance(best['tree'], gtree.BranchNode) or isinstance(best['tree'], gtree.LeafNode)
